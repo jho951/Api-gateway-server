@@ -1,0 +1,24 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_BIND: 0.0.0.0
+      GATEWAY_PORT: 8080
+      GATEWAY_CORS_ALLOWED_ORIGINS: "*"
+      GATEWAY_ALLOWED_IPS: "*"
+      GATEWAY_ADMIN_ALLOWED_IPS: "*"
+      GATEWAY_ADVANCED_ROUTE_POLICIES_ENABLED: "false"
+      GATEWAY_ADMIN_PERMISSION_CHECK_ENABLED: "false"
+      GATEWAY_PERMISSION_CACHE_ENABLED: "false"
+      AUTH_SERVICE_URL: http://auth-service:8080
+      USER_SERVICE_URL: http://user-service:8080
+      BLOCK_SERVICE_URL: http://block-service:8080
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

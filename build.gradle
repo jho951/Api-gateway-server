@@ -1,13 +1,30 @@
-allprojects {
-    group = 'com.example'
-    version = '1.0.0'
-    repositories { mavenCentral() }
+plugins {
+    id 'java'
+    id 'application'
 }
 
-subprojects {
-    plugins.withId('java') {
-        tasks.withType(Test).configureEach {
-            useJUnitPlatform()
-        }
+group = providers.gradleProperty('projectGroup').get()
+version = providers.gradleProperty('projectVersion').get()
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    ipGuardVersion = '2.0.5'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
     }
+}
+
+application {
+    mainClass = 'com.gateway.GatewayApplication'
+}
+
+dependencies {
+    implementation "io.github.jho951:ip-guard-core:${ipGuardVersion}"
+    implementation "io.github.jho951:ip-guard-spi:${ipGuardVersion}"
 }

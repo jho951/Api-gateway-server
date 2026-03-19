@@ -18,7 +18,7 @@ public final class RuntimeEnvironment {
         Map<String, String> systemEnv = System.getenv();
         ParsedArgs parsedArgs = ParsedArgs.from(args);
 
-        String profile = firstNonBlank(parsedArgs.profile(), systemEnv.get("APP_ENV"), "dev");
+        String profile = firstNonBlank(parsedArgs.profile(), systemEnv.get("APP_ENV"), "local");
         Path envFile = resolveEnvFile(parsedArgs.envFile(), systemEnv.get("APP_ENV_FILE"), profile);
 
         Map<String, String> merged = new LinkedHashMap<>(loadEnvFile(envFile));
@@ -30,8 +30,16 @@ public final class RuntimeEnvironment {
     }
 
     private static Path resolveEnvFile(String argEnvFile, String systemEnvFile, String profile) {
-        String rawPath = firstNonBlank(argEnvFile, systemEnvFile, "env/" + profile + ".env");
+        String rawPath = firstNonBlank(argEnvFile, systemEnvFile, defaultEnvFile(profile));
         return Paths.get(rawPath).toAbsolutePath().normalize();
+    }
+
+    private static String defaultEnvFile(String profile) {
+        return switch (profile) {
+            case "local", "dev" -> ".env.local";
+            case "prod" -> ".env.prod";
+            default -> ".env." + profile;
+        };
     }
 
     private static Map<String, String> loadEnvFile(Path envFile) {

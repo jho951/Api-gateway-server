@@ -4,10 +4,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROFILE="${1:-dev}"
+PROFILE="${1:-local}"
 
-if [[ "$PROFILE" != "dev" && "$PROFILE" != "prod" ]]; then
-  echo "usage: bash scripts/run.local.sh [dev|prod]" >&2
+if [[ "$PROFILE" != "local" && "$PROFILE" != "prod" ]]; then
+  echo "usage: bash scripts/run.local.sh [local|prod]" >&2
   exit 1
 fi
 

@@ -2,11 +2,6 @@ package com.gateway.server;
 
 import com.gateway.api.GatewayApiPaths;
 import com.gateway.api.InternalServiceApi;
-import com.gateway.auth.AuthResult;
-import com.gateway.auth.AuthServiceClient;
-import com.gateway.auth.AuthValidationCache;
-import com.gateway.auth.PermissionServiceClient;
-import com.gateway.cache.RedisPermissionCache;
 import com.gateway.code.ErrorCode;
 import com.gateway.code.SuccessCode;
 import com.gateway.config.GatewayConfig;
@@ -25,6 +20,7 @@ import com.gateway.proxy.ReverseProxyClient;
 import com.gateway.routing.RouteMatch;
 import com.gateway.routing.RouteResolver;
 import com.gateway.routing.RouteType;
+import com.gateway.security.JwtPrecheckPolicy;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -43,32 +39,23 @@ public final class GatewayHandler implements HttpHandler {
 
     private final GatewayConfig config;
     private final RouteResolver routeResolver;
-    private final AuthServiceClient authServiceClient;
-    private final PermissionServiceClient permissionServiceClient;
-    private final AuthValidationCache authValidationCache;
     private final ReverseProxyClient proxyClient;
     private final CorsPolicy corsPolicy;
     private final SecurityHeadersPolicy securityHeadersPolicy;
     private final RequestWindowRateLimiter loginRateLimiter;
-    private final RedisPermissionCache permissionCache;
+    private final JwtPrecheckPolicy jwtPrecheckPolicy;
 
     public GatewayHandler(GatewayConfig config) {
         this.config = config;
         this.routeResolver = new RouteResolver(config.routes());
-        this.authServiceClient = new AuthServiceClient(config.authTimeout());
-        this.permissionServiceClient = new PermissionServiceClient(config.authTimeout());
-        this.authValidationCache = new AuthValidationCache(config.authCacheTtl());
         this.proxyClient = new ReverseProxyClient(config.requestTimeout());
         this.corsPolicy = new CorsPolicy(config.allowedOrigins());
         this.securityHeadersPolicy = new SecurityHeadersPolicy();
         this.loginRateLimiter = new RequestWindowRateLimiter(config.loginRateLimitPerMinute(), 60_000);
-        this.permissionCache = new RedisPermissionCache(
-                config.permissionCacheEnabled(),
-                config.redisHost(),
-                config.redisPort(),
-                config.redisTimeoutMs(),
-                config.permissionCacheTtlSeconds(),
-                config.permissionCacheKeyPrefix()
+        this.jwtPrecheckPolicy = new JwtPrecheckPolicy(
+                config.jwtPrecheckExpEnabled(),
+                config.jwtPrecheckExpClockSkewSeconds(),
+                config.jwtPrecheckMaxTokenLength()
         );
     }
 
@@ -80,9 +67,7 @@ public final class GatewayHandler implements HttpHandler {
         String correlationId = resolveOrCreate(exchange.getRequestHeaders().getFirst(InternalServiceApi.Headers.CORRELATION_ID));
         applyResponsePolicies(exchange, requestId, correlationId);
 
-        String authOutcome = "SKIPPED";
-        String userId = "";
-        boolean adminRequest = false;
+        String authOutcome = "FORWARDED";
 
         try {
             if (!isAllowedOrigin(exchange.getRequestHeaders().getFirst("Origin"))) {
@@ -109,14 +94,11 @@ public final class GatewayHandler implements HttpHandler {
             }
 
             RouteType routeType = match.route().routeType();
-            RouteType effectiveRouteType = effectiveRouteType(routeType);
-            adminRequest = routeType == RouteType.ADMIN && config.advancedRoutePoliciesEnabled();
-
             if (routeType == RouteType.INTERNAL) {
                 throw new GlobalException(ErrorCode.FORBIDDEN);
             }
 
-            if (!config.ipPolicy().allows(clientIp)) {
+            if (shouldApplyGatewayIpGuard(routeType) && !config.ipPolicy().allows(clientIp)) {
                 throw new GlobalException(ErrorCode.FORBIDDEN);
             }
 
@@ -124,32 +106,12 @@ public final class GatewayHandler implements HttpHandler {
                 throw new GlobalException(ErrorCode.TOO_MANY_REQUESTS);
             }
 
-            AuthResult authResult = null;
-            if (effectiveRouteType == RouteType.PROTECTED || effectiveRouteType == RouteType.ADMIN) {
-                authResult = authenticate(
-                        exchange,
-                        clientIp,
-                        requestId,
-                        correlationId,
-                        effectiveRouteType == RouteType.ADMIN
-                );
-                authOutcome = authResult.isAuthenticated() ? "SUCCESS" : "FAILED";
-                if (!authResult.isAuthenticated()) {
-                    throw new GlobalException(authResult.getStatusCode() == 403 ? ErrorCode.FORBIDDEN : ErrorCode.UNAUTHORIZED);
-                }
-                userId = authResult.getUserId();
-            }
-
-            if (effectiveRouteType == RouteType.ADMIN) {
-                if (!config.adminIpPolicy().allows(clientIp)) {
-                    throw new GlobalException(ErrorCode.FORBIDDEN);
-                }
-                if (!authResult.isAdmin()) {
-                    throw new GlobalException(ErrorCode.FORBIDDEN);
-                }
-                if (config.adminPermissionCheckEnabled()
-                        && !verifyAdminAccess(adapter.method(), path, requestId, correlationId, authResult)) {
-                    throw new GlobalException(ErrorCode.FORBIDDEN);
+            if (routeType == RouteType.PROTECTED) {
+                JwtPrecheckPolicy.Result precheckResult =
+                        jwtPrecheckPolicy.precheck(exchange.getRequestHeaders().getFirst("Authorization"));
+                authOutcome = precheckResult.outcome();
+                if (!precheckResult.accepted()) {
+                    throw new GlobalException(ErrorCode.UNAUTHORIZED);
                 }
             }
 
@@ -158,10 +120,6 @@ public final class GatewayHandler implements HttpHandler {
             Map<String, List<String>> proxiedHeaders = sanitizeInboundHeaders(exchange, match.route().upstreamName());
             proxiedHeaders.put(InternalServiceApi.Headers.REQUEST_ID, List.of(requestId));
             proxiedHeaders.put(InternalServiceApi.Headers.CORRELATION_ID, List.of(correlationId));
-            if (authResult != null && authResult.isAuthenticated()) {
-                authResult.toTrustedHeaders(requestId, correlationId)
-                        .forEach((name, values) -> proxiedHeaders.put(name, new ArrayList<>(values)));
-            }
 
             byte[] requestBody = adapter.readBody();
             ProxyRequest proxyRequest = new ProxyRequest(
@@ -173,10 +131,13 @@ public final class GatewayHandler implements HttpHandler {
             );
 
             ProxyResponse proxyResponse = proxyClient.forward(proxyRequest);
+            if ("FORWARDED".equals(authOutcome)) {
+                authOutcome = "PRECHECK_BYPASSED";
+            }
             applyResponsePolicies(exchange, requestId, correlationId);
             adapter.sendStream(proxyResponse.getStatusCode(), proxyResponse.getHeaders(), proxyResponse.getBody());
             logRequest(requestId, correlationId, match.route().upstreamName(), path, adapter.method(), clientIp,
-                    proxyResponse.getStatusCode(), authOutcome, userId, adminRequest, startedAt);
+                    proxyResponse.getStatusCode(), authOutcome, "", false, startedAt);
         } catch (GlobalException ex) {
             GlobalExceptionHandler.ResponseSpec responseSpec = GlobalExceptionHandler.handleGlobalException(ex);
             adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
@@ -199,49 +160,6 @@ public final class GatewayHandler implements HttpHandler {
         } finally {
             adapter.close();
         }
-    }
-
-    private AuthResult authenticate(
-            HttpExchange exchange,
-            String clientIp,
-            String requestId,
-            String correlationId,
-            boolean forceRefresh
-    ) throws IOException, InterruptedException {
-        String cacheKey = buildAuthCacheKey(exchange, clientIp);
-        if (!forceRefresh) {
-            AuthResult cached = authValidationCache.get(cacheKey);
-            if (cached != null) {
-                return cached;
-            }
-        }
-
-        AuthResult result = authServiceClient.validate(
-                config.authValidateUri(),
-                exchange.getRequestMethod(),
-                exchange.getRequestURI(),
-                exchange.getRequestHeaders(),
-                clientIp,
-                requestId,
-                correlationId
-        );
-
-        if (!forceRefresh && result.isAuthenticated()) {
-            authValidationCache.put(cacheKey, result);
-        }
-        return result;
-    }
-
-    private String buildAuthCacheKey(HttpExchange exchange, String clientIp) {
-        String cookie = headerOrEmpty(exchange, "Cookie");
-        String ticket = headerOrEmpty(exchange, InternalServiceApi.Headers.SSO_TICKET);
-        String authorization = headerOrEmpty(exchange, "Authorization");
-        return clientIp + "|" + cookie + "|" + ticket + "|" + authorization;
-    }
-
-    private String headerOrEmpty(HttpExchange exchange, String name) {
-        String value = exchange.getRequestHeaders().getFirst(name);
-        return value == null ? "" : value;
     }
 
     private void enforceBodySize(HttpExchange exchange) {
@@ -274,14 +192,15 @@ public final class GatewayHandler implements HttpHandler {
     }
 
     private boolean isLoginPath(String path) {
-        return GatewayApiPaths.AUTH_LOGIN_GITHUB.equals(path);
+        return GatewayApiPaths.AUTH_LOGIN.equals(path)
+                || GatewayApiPaths.AUTH_LOGIN_GITHUB.equals(path)
+                || GatewayApiPaths.AUTH_SSO_START.equals(path)
+                || path.startsWith("/auth/oauth2/authorize/")
+                || path.startsWith("/oauth2/authorization/");
     }
 
-    private RouteType effectiveRouteType(RouteType routeType) {
-        if (!config.advancedRoutePoliciesEnabled() && routeType == RouteType.ADMIN) {
-            return RouteType.PROTECTED;
-        }
-        return routeType;
+    private boolean shouldApplyGatewayIpGuard(RouteType routeType) {
+        return routeType == RouteType.ADMIN;
     }
 
     private String normalizePath(String path) {
@@ -305,53 +224,7 @@ public final class GatewayHandler implements HttpHandler {
                         Map.Entry::getKey,
                         entry -> new ArrayList<>(entry.getValue())
                 ));
-
-        if (!"auth".equalsIgnoreCase(upstreamName)) {
-            sanitized.remove("Cookie");
-            sanitized.remove("cookie");
-            sanitized.remove("Authorization");
-            sanitized.remove("authorization");
-            sanitized.remove(InternalServiceApi.Headers.SSO_TICKET);
-            sanitized.remove(InternalServiceApi.Headers.SSO_TICKET.toLowerCase());
-        }
         return sanitized;
-    }
-
-    private boolean verifyAdminAccess(
-            String method,
-            String path,
-            String requestId,
-            String correlationId,
-            AuthResult authResult
-    ) throws IOException, InterruptedException {
-        String cacheKey = buildPermissionCacheKey(method, path, authResult);
-        Boolean cached = permissionCache.get(cacheKey);
-        if (cached != null) {
-            return cached;
-        }
-
-        boolean allowed = permissionServiceClient.verifyAdminAccess(
-                config.adminPermissionVerifyUri(),
-                method,
-                path,
-                requestId,
-                correlationId,
-                authResult
-        );
-        permissionCache.put(cacheKey, allowed);
-        return allowed;
-    }
-
-    private String buildPermissionCacheKey(String method, String path, AuthResult authResult) {
-        return authResult.getUserId()
-                + "|"
-                + authResult.getRole()
-                + "|"
-                + authResult.getSessionId()
-                + "|"
-                + method
-                + "|"
-                + path;
     }
 
     private void logRequest(

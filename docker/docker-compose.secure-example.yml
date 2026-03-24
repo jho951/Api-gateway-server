@@ -1,0 +1,53 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: api-gateway-secure
+    ports:
+      - "8080:8080"
+    env_file:
+      - ../.env.local
+    environment:
+      APP_ENV: local
+      APP_ENV_FILE: /app/.env.local
+      AUTH_SERVICE_URL: http://auth-service:8081
+      USER_SERVICE_URL: http://user-service:8082
+      BLOCK_SERVICE_URL: http://documents-service:8083
+      PERMISSION_SERVICE_URL: http://permission-service:8084
+      PERMISSION_ADMIN_VERIFY_URL: http://permission-service:8084/permissions/internal/admin/verify
+    depends_on:
+      - auth-service
+      - user-service
+      - documents-service
+      - permission-service
+    networks:
+      - public-edge
+      - service-backplane
+
+  auth-service:
+    image: ${AUTH_SERVICE_IMAGE:-auth-service:latest}
+    networks:
+      - service-backplane
+
+  user-service:
+    image: ${USER_SERVICE_IMAGE:-user-service:latest}
+    networks:
+      - service-backplane
+
+  documents-service:
+    image: ${DOCUMENTS_SERVICE_IMAGE:-documents-service:latest}
+    networks:
+      - service-backplane
+
+  permission-service:
+    image: ${PERMISSION_SERVICE_IMAGE:-permission-service:latest}
+    networks:
+      - service-backplane
+
+networks:
+  public-edge:
+    driver: bridge
+  service-backplane:
+    driver: bridge
+    internal: true

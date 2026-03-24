@@ -24,11 +24,6 @@ public final class GatewayApplication {
     public static void main(String[] args) throws Exception {
         RuntimeEnvironment.ResolvedEnvironment runtimeEnvironment = RuntimeEnvironment.load(args);
         GatewayConfig config = GatewayConfig.fromEnv(runtimeEnvironment.variables());
-        System.out.printf(
-                "Starting gateway with profile '%s' using %s%n",
-                runtimeEnvironment.profile(),
-                runtimeEnvironment.envFile()
-        );
         GatewayServer server = new GatewayServer(config);
         server.start();
     }

@@ -34,7 +34,11 @@ public final class CorsPolicy {
 
         responseHeaders.set("Access-Control-Allow-Origin", allowOrigin);
         responseHeaders.set("Vary", "Origin");
-        responseHeaders.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Request-Id");
+        responseHeaders.set("Access-Control-Allow-Credentials", "true");
+        responseHeaders.set(
+                "Access-Control-Allow-Headers",
+                "Authorization, Content-Type, X-Request-Id"
+        );
         responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         responseHeaders.set("Access-Control-Max-Age", "600");
     }
@@ -49,7 +53,7 @@ public final class CorsPolicy {
 
     private String resolveOrigin(String requestOrigin) {
         if (allowedOrigins.contains("*")) {
-            return requestOrigin == null || requestOrigin.isBlank() ? "*" : requestOrigin;
+            return requestOrigin == null || requestOrigin.isBlank() ? null : requestOrigin;
         }
         if (requestOrigin == null || requestOrigin.isBlank()) {
             return null;

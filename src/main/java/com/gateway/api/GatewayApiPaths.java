@@ -25,15 +25,11 @@ public final class GatewayApiPaths {
     public static final String LOGIN_OAUTH2_CALLBACK_ALL = "/login/oauth2/**";
 
     /** 사용자 및 데이터 서비스 */
-    public static final String USERS_SIGNUP = "/users/signup";
-    public static final String USERS_ME = "/users/me";
-    public static final String BLOCKS_ALL = "/blocks/**";
+    public static final String USERS_SIGNUP = "/api/users/signup";
+    public static final String USERS_ME = "/api/users/me";
+    public static final String INTERNAL_USERS_ALL = "/internal/users/**";
+    public static final String DOCUMENTS_ALL = "/api/documents/**";
     public static final String PERMISSIONS_ALL = "/permissions/**";
-
-    /** 관리자 전용 */
-    public static final String ADMIN_USERS_ALL = "/admin/users/**";
-    public static final String ADMIN_BLOCKS_ALL = "/admin/blocks/**";
-    public static final String ADMIN_PERMISSIONS_ALL = "/admin/permissions/**";
 
     /** 서버 내부 전용 */
     public static final String INTERNAL_ALL = "/internal/**";

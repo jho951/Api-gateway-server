@@ -6,19 +6,15 @@ import java.util.Iterator;
 import java.util.Map;
 
 public final class Jsons {
-    private Jsons() {
-    }
+    /** 인스턴스 방지 */
+    private Jsons() {}
 
-    public static String toJson(GlobalResponse<?> response) {
-        StringBuilder builder = new StringBuilder();
-        builder.append('{')
-                .append("\"httpStatus\":").append(response.getHttpStatus()).append(',')
-                .append("\"success\":").append(response.isSuccess()).append(',')
-                .append("\"message\":\"").append(escape(response.getMessage())).append("\",")
-                .append("\"code\":").append(response.getCode()).append(',')
-                .append("\"data\":").append(toJsonValue(response.getData()))
-                .append('}');
-        return builder.toString();
+    private static String escape(String value) {
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r");
     }
 
     private static String toJsonValue(Object value) {
@@ -49,11 +45,16 @@ public final class Jsons {
         return "\"" + escape(String.valueOf(value)) + "\"";
     }
 
-    private static String escape(String value) {
-        return value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r");
+    public static String toJson(GlobalResponse<?> response) {
+        StringBuilder builder = new StringBuilder();
+        builder.append('{')
+                .append("\"httpStatus\":").append(response.getHttpStatus()).append(',')
+                .append("\"success\":").append(response.isSuccess()).append(',')
+                .append("\"message\":\"").append(escape(response.getMessage())).append("\",")
+                .append("\"code\":").append(response.getCode()).append(',')
+                .append("\"data\":").append(toJsonValue(response.getData()))
+                .append('}');
+        return builder.toString();
     }
+
 }

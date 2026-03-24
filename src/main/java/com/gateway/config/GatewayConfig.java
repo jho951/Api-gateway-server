@@ -25,12 +25,15 @@ public final class GatewayConfig {
     private final URI adminPermissionVerifyUri;
     private final List<String> allowedOrigins;
     private final IpGuardPolicy ipPolicy;
+    private final IpGuardPolicy internalIpPolicy;
     private final IpGuardPolicy adminIpPolicy;
     private final int loginRateLimitPerMinute;
     private final int maxBodyBytes;
     private final boolean jwtPrecheckExpEnabled;
     private final int jwtPrecheckExpClockSkewSeconds;
     private final int jwtPrecheckMaxTokenLength;
+    private final List<String> gatewayUserIdClaimNames;
+    private final boolean forwardAuthorizationHeader;
     private final boolean advancedRoutePoliciesEnabled;
     private final boolean adminPermissionCheckEnabled;
     private final boolean permissionCacheEnabled;
@@ -51,12 +54,15 @@ public final class GatewayConfig {
             URI adminPermissionVerifyUri,
             List<String> allowedOrigins,
             IpGuardPolicy ipPolicy,
+            IpGuardPolicy internalIpPolicy,
             IpGuardPolicy adminIpPolicy,
             int loginRateLimitPerMinute,
             int maxBodyBytes,
             boolean jwtPrecheckExpEnabled,
             int jwtPrecheckExpClockSkewSeconds,
             int jwtPrecheckMaxTokenLength,
+            List<String> gatewayUserIdClaimNames,
+            boolean forwardAuthorizationHeader,
             boolean advancedRoutePoliciesEnabled,
             boolean adminPermissionCheckEnabled,
             boolean permissionCacheEnabled,
@@ -76,12 +82,15 @@ public final class GatewayConfig {
         this.adminPermissionVerifyUri = adminPermissionVerifyUri;
         this.allowedOrigins = allowedOrigins;
         this.ipPolicy = ipPolicy;
+        this.internalIpPolicy = internalIpPolicy;
         this.adminIpPolicy = adminIpPolicy;
         this.loginRateLimitPerMinute = loginRateLimitPerMinute;
         this.maxBodyBytes = maxBodyBytes;
         this.jwtPrecheckExpEnabled = jwtPrecheckExpEnabled;
         this.jwtPrecheckExpClockSkewSeconds = jwtPrecheckExpClockSkewSeconds;
         this.jwtPrecheckMaxTokenLength = jwtPrecheckMaxTokenLength;
+        this.gatewayUserIdClaimNames = gatewayUserIdClaimNames;
+        this.forwardAuthorizationHeader = forwardAuthorizationHeader;
         this.advancedRoutePoliciesEnabled = advancedRoutePoliciesEnabled;
         this.adminPermissionCheckEnabled = adminPermissionCheckEnabled;
         this.permissionCacheEnabled = permissionCacheEnabled;
@@ -108,6 +117,8 @@ public final class GatewayConfig {
         boolean jwtPrecheckExpEnabled = parseBoolean(env.get("GATEWAY_JWT_PRECHECK_EXP_ENABLED"), false);
         int jwtPrecheckExpClockSkewSeconds = parseInt(env.get("GATEWAY_JWT_PRECHECK_EXP_CLOCK_SKEW_SECONDS"), 30, "GATEWAY_JWT_PRECHECK_EXP_CLOCK_SKEW_SECONDS");
         int jwtPrecheckMaxTokenLength = parseInt(env.get("GATEWAY_JWT_PRECHECK_MAX_TOKEN_LENGTH"), 4096, "GATEWAY_JWT_PRECHECK_MAX_TOKEN_LENGTH");
+        List<String> gatewayUserIdClaimNames = EnvParsers.csvOrDefault(env.get("GATEWAY_USER_ID_CLAIMS"), List.of("sub", "userId"));
+        boolean forwardAuthorizationHeader = parseBoolean(env.get("GATEWAY_FORWARD_AUTHORIZATION_HEADER"), false);
         boolean advancedRoutePoliciesEnabled = false;
         boolean adminPermissionCheckEnabled = false;
         boolean permissionCacheEnabled = false;
@@ -131,6 +142,11 @@ public final class GatewayConfig {
                 EnvParsers.csvOrDefault(env.get("GATEWAY_ALLOWED_IPS"), List.of("*")),
                 parseBoolean(env.get("GATEWAY_IP_GUARD_DEFAULT_ALLOW"), false)
         );
+        IpGuardPolicy internalIpPolicy = new IpGuardPolicy(
+                parseBoolean(env.get("GATEWAY_INTERNAL_IP_GUARD_ENABLED"), true),
+                EnvParsers.csvOrDefault(env.get("GATEWAY_INTERNAL_ALLOWED_IPS"), List.of("127.0.0.1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")),
+                parseBoolean(env.get("GATEWAY_INTERNAL_IP_GUARD_DEFAULT_ALLOW"), false)
+        );
         IpGuardPolicy adminIpPolicy = new IpGuardPolicy(false, List.of("*"), true);
 
         List<RouteDefinition> routes = buildRoutes(authServiceUri, userServiceUri, blockServiceUri, permissionServiceUri);
@@ -145,12 +161,15 @@ public final class GatewayConfig {
                 adminPermissionVerifyUri,
                 allowedOrigins,
                 ipPolicy,
+                internalIpPolicy,
                 adminIpPolicy,
                 loginRateLimitPerMinute,
                 maxBodyBytes,
                 jwtPrecheckExpEnabled,
                 jwtPrecheckExpClockSkewSeconds,
                 jwtPrecheckMaxTokenLength,
+                gatewayUserIdClaimNames,
+                forwardAuthorizationHeader,
                 advancedRoutePoliciesEnabled,
                 adminPermissionCheckEnabled,
                 permissionCacheEnabled,
@@ -170,7 +189,7 @@ public final class GatewayConfig {
             URI permissionServiceUri
     ) {
         List<RouteDefinition> routes = new ArrayList<>();
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_INTERNAL_ALL, RouteType.INTERNAL, "auth", authServiceUri));
+        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_INTERNAL_ALL, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(GatewayApiPaths.INTERNAL_ALL, RouteType.INTERNAL, "internal", authServiceUri));
         routes.add(new RouteDefinition(GatewayApiPaths.AUTH_LOGIN, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(GatewayApiPaths.AUTH_LOGIN_GITHUB, RouteType.PUBLIC, "auth", authServiceUri));
@@ -183,10 +202,17 @@ public final class GatewayConfig {
         routes.add(new RouteDefinition(GatewayApiPaths.OAUTH2_AUTHORIZATION_ALL, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(GatewayApiPaths.LOGIN_OAUTH2_CALLBACK_ALL, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(GatewayApiPaths.AUTH_SESSION, RouteType.PROTECTED, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_ME, RouteType.PROTECTED, "auth", authServiceUri));
+        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_ME, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(GatewayApiPaths.USERS_SIGNUP, RouteType.PUBLIC, "user", userServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.USERS_ME, RouteType.PROTECTED, "user", userServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.BLOCKS_ALL, RouteType.PROTECTED, "block", blockServiceUri));
+        routes.add(new RouteDefinition(GatewayApiPaths.USERS_ME, RouteType.PUBLIC, "user", userServiceUri));
+        routes.add(new RouteDefinition(GatewayApiPaths.INTERNAL_USERS_ALL, RouteType.INTERNAL, "user", userServiceUri));
+        routes.add(new RouteDefinition(
+                GatewayApiPaths.DOCUMENTS_ALL,
+                RouteType.PROTECTED,
+                "block",
+                blockServiceUri,
+                "/api/documents"
+        ));
         if (permissionServiceUri != null) {
             routes.add(new RouteDefinition(GatewayApiPaths.PERMISSIONS_ALL, RouteType.PROTECTED, "permission", permissionServiceUri));
         }
@@ -267,6 +293,10 @@ public final class GatewayConfig {
         return ipPolicy;
     }
 
+    public IpGuardPolicy internalIpPolicy() {
+        return internalIpPolicy;
+    }
+
     public IpGuardPolicy adminIpPolicy() {
         return adminIpPolicy;
     }
@@ -289,6 +319,14 @@ public final class GatewayConfig {
 
     public int jwtPrecheckMaxTokenLength() {
         return jwtPrecheckMaxTokenLength;
+    }
+
+    public List<String> gatewayUserIdClaimNames() {
+        return gatewayUserIdClaimNames;
+    }
+
+    public boolean forwardAuthorizationHeader() {
+        return forwardAuthorizationHeader;
     }
 
     public boolean permissionCacheEnabled() {

@@ -1,15 +1,15 @@
 package com.gateway.server;
 
+import com.gateway.auth.AuthResult;
+import com.gateway.auth.AuthServiceClient;
 import com.gateway.api.GatewayApiPaths;
 import com.gateway.api.InternalServiceApi;
 import com.gateway.code.ErrorCode;
 import com.gateway.code.SuccessCode;
 import com.gateway.config.GatewayConfig;
-import com.gateway.dto.GlobalResponse;
 import com.gateway.exception.GlobalException;
 import com.gateway.exception.GlobalExceptionHandler;
 import com.gateway.http.ExchangeAdapter;
-import com.gateway.http.Jsons;
 import com.gateway.http.TrustedHeaderNames;
 import com.gateway.policy.CorsPolicy;
 import com.gateway.policy.RequestWindowRateLimiter;
@@ -44,6 +44,7 @@ public final class GatewayHandler implements HttpHandler {
     private final SecurityHeadersPolicy securityHeadersPolicy;
     private final RequestWindowRateLimiter loginRateLimiter;
     private final JwtPrecheckPolicy jwtPrecheckPolicy;
+    private final AuthServiceClient authServiceClient;
 
     public GatewayHandler(GatewayConfig config) {
         this.config = config;
@@ -57,6 +58,7 @@ public final class GatewayHandler implements HttpHandler {
                 config.jwtPrecheckExpClockSkewSeconds(),
                 config.jwtPrecheckMaxTokenLength()
         );
+        this.authServiceClient = new AuthServiceClient(config.requestTimeout());
     }
 
     @Override
@@ -68,6 +70,7 @@ public final class GatewayHandler implements HttpHandler {
         applyResponsePolicies(exchange, requestId, correlationId);
 
         String authOutcome = "FORWARDED";
+        String resolvedUserId = "";
 
         try {
             if (!isAllowedOrigin(exchange.getRequestHeaders().getFirst("Origin"))) {
@@ -84,7 +87,9 @@ public final class GatewayHandler implements HttpHandler {
 
             String path = normalizePath(adapter.uri().getPath());
             if (isHealthPath(path)) {
-                adapter.sendJson(200, Jsons.toJson(GlobalResponse.ok(SuccessCode.GET_SUCCESS, Map.of("status", "UP"))));
+                GlobalExceptionHandler.ResponseSpec responseSpec =
+                        GlobalExceptionHandler.fromSuccessCode(SuccessCode.GET_SUCCESS, Map.of("status", "UP"));
+                adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
                 return;
             }
 
@@ -94,7 +99,7 @@ public final class GatewayHandler implements HttpHandler {
             }
 
             RouteType routeType = match.route().routeType();
-            if (routeType == RouteType.INTERNAL) {
+            if (routeType == RouteType.INTERNAL && !config.internalIpPolicy().allows(clientIp)) {
                 throw new GlobalException(ErrorCode.FORBIDDEN);
             }
 
@@ -106,20 +111,37 @@ public final class GatewayHandler implements HttpHandler {
                 throw new GlobalException(ErrorCode.TOO_MANY_REQUESTS);
             }
 
-            if (routeType == RouteType.PROTECTED) {
+            if (requiresAuthorizationPrecheck(match.route(), path)) {
+                String authorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
                 JwtPrecheckPolicy.Result precheckResult =
-                        jwtPrecheckPolicy.precheck(exchange.getRequestHeaders().getFirst("Authorization"));
+                        jwtPrecheckPolicy.precheck(authorizationHeader);
                 authOutcome = precheckResult.outcome();
                 if (!precheckResult.accepted()) {
                     throw new GlobalException(ErrorCode.UNAUTHORIZED);
                 }
             }
 
+            if (requiresGatewayManagedAuth(match.route())) {
+                String authorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
+                AuthResult authResult = authServiceClient.validateSession(
+                        config.authServiceUri(),
+                        authorizationHeader,
+                        requestId,
+                        correlationId
+                );
+                if (!authResult.isAuthenticated()) {
+                    throw new GlobalException(ErrorCode.UNAUTHORIZED);
+                }
+                resolvedUserId = authResult.getUserId();
+                authOutcome = "AUTH_SERVICE_VALIDATED";
+            }
+
             enforceBodySize(exchange);
 
-            Map<String, List<String>> proxiedHeaders = sanitizeInboundHeaders(exchange, match.route().upstreamName());
+            Map<String, List<String>> proxiedHeaders = sanitizeInboundHeaders(exchange, match.route());
             proxiedHeaders.put(InternalServiceApi.Headers.REQUEST_ID, List.of(requestId));
             proxiedHeaders.put(InternalServiceApi.Headers.CORRELATION_ID, List.of(correlationId));
+            injectTrustedContext(proxiedHeaders, resolvedUserId);
 
             byte[] requestBody = adapter.readBody();
             ProxyRequest proxyRequest = new ProxyRequest(
@@ -137,7 +159,7 @@ public final class GatewayHandler implements HttpHandler {
             applyResponsePolicies(exchange, requestId, correlationId);
             adapter.sendStream(proxyResponse.getStatusCode(), proxyResponse.getHeaders(), proxyResponse.getBody());
             logRequest(requestId, correlationId, match.route().upstreamName(), path, adapter.method(), clientIp,
-                    proxyResponse.getStatusCode(), authOutcome, "", false, startedAt);
+                    proxyResponse.getStatusCode(), authOutcome, resolvedUserId, false, startedAt);
         } catch (GlobalException ex) {
             GlobalExceptionHandler.ResponseSpec responseSpec = GlobalExceptionHandler.handleGlobalException(ex);
             adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
@@ -148,14 +170,16 @@ public final class GatewayHandler implements HttpHandler {
             Thread.currentThread().interrupt();
             GlobalExceptionHandler.ResponseSpec responseSpec = GlobalExceptionHandler.fromErrorCode(ErrorCode.UPSTREAM_TIMEOUT);
             adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+        } catch (IOException ex) {
+            log.log(Level.WARNING, "requestId=" + requestId + " upstream_failure=" + ex.getMessage());
+            GlobalExceptionHandler.ResponseSpec responseSpec = GlobalExceptionHandler.fromErrorCode(ErrorCode.UPSTREAM_FAILURE);
+            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
         } catch (IllegalArgumentException ex) {
             GlobalExceptionHandler.ResponseSpec responseSpec = GlobalExceptionHandler.handleIllegalArgumentException(ex);
             adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
         } catch (Exception ex) {
             log.log(Level.SEVERE, "requestId=" + requestId + " gateway_error=" + ex.getMessage(), ex);
-            GlobalExceptionHandler.ResponseSpec responseSpec = ex instanceof IOException
-                    ? GlobalExceptionHandler.fromErrorCode(ErrorCode.UPSTREAM_FAILURE)
-                    : GlobalExceptionHandler.handleException(ex);
+            GlobalExceptionHandler.ResponseSpec responseSpec = GlobalExceptionHandler.handleException(ex);
             adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
         } finally {
             adapter.close();
@@ -217,14 +241,42 @@ public final class GatewayHandler implements HttpHandler {
         return (headerValue == null || headerValue.isBlank()) ? UUID.randomUUID().toString() : headerValue;
     }
 
-    private Map<String, List<String>> sanitizeInboundHeaders(HttpExchange exchange, String upstreamName) {
+    private boolean requiresAuthorizationPrecheck(com.gateway.routing.RouteDefinition route, String path) {
+        return requiresGatewayManagedAuth(route)
+                || GatewayApiPaths.USERS_ME.equals(path)
+                || GatewayApiPaths.INTERNAL_USERS_ALL.substring(0, GatewayApiPaths.INTERNAL_USERS_ALL.length() - 3).equals(path)
+                || path.startsWith("/internal/users/");
+    }
+
+    private boolean requiresGatewayManagedAuth(com.gateway.routing.RouteDefinition route) {
+        return route.routeType() == RouteType.PROTECTED && "block".equals(route.upstreamName());
+    }
+
+    private Map<String, List<String>> sanitizeInboundHeaders(HttpExchange exchange, com.gateway.routing.RouteDefinition route) {
         Map<String, List<String>> sanitized = exchange.getRequestHeaders().entrySet().stream()
                 .filter(entry -> !TrustedHeaderNames.ALL.contains(entry.getKey().toLowerCase()))
                 .collect(java.util.stream.Collectors.toMap(
                         Map.Entry::getKey,
                         entry -> new ArrayList<>(entry.getValue())
                 ));
+        if (!shouldForwardAuthorizationHeader(route)) {
+            sanitized.entrySet().removeIf(entry -> "authorization".equalsIgnoreCase(entry.getKey()));
+        }
         return sanitized;
+    }
+
+    private boolean shouldForwardAuthorizationHeader(com.gateway.routing.RouteDefinition route) {
+        if ("user".equals(route.upstreamName()) || "auth".equals(route.upstreamName())) {
+            return true;
+        }
+        return config.forwardAuthorizationHeader();
+    }
+
+    private void injectTrustedContext(Map<String, List<String>> proxiedHeaders, String resolvedUserId) {
+        if (resolvedUserId == null || resolvedUserId.isBlank()) {
+            return;
+        }
+        proxiedHeaders.put(InternalServiceApi.Headers.USER_ID, List.of(resolvedUserId));
     }
 
     private void logRequest(

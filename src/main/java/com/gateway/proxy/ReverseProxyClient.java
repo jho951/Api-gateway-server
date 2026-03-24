@@ -57,18 +57,27 @@ public final class ReverseProxyClient {
                 .method(request.getMethod(), bodyPublisher(request.getBody()));
 
         request.getHeaders().forEach((name, values) -> {
-            if (isForwardable(name)) {
+            if (isForwardable(name) && !isManagedForwardedHeader(name)) {
                 for (String value : values) {
                     builder.header(name, value);
                 }
             }
         });
 
-        builder.header("X-Forwarded-For", request.getClientIp());
-        builder.header("X-Forwarded-Proto", request.getTargetUri().getScheme());
+        builder.setHeader("X-Forwarded-For", resolveForwardedFor(request));
+        builder.setHeader("X-Forwarded-Proto", resolveForwardedProto(request));
 
-        HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
-        return new ProxyResponse(response.statusCode(), filterResponseHeaders(response.headers().map()), response.body());
+        try {
+            HttpResponse<byte[]> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray());
+            return new ProxyResponse(response.statusCode(), filterResponseHeaders(response.headers().map()), response.body());
+        } catch (IOException ex) {
+            throw new IOException(
+                    "Upstream request failed: method=" + request.getMethod()
+                            + " targetUri=" + request.getTargetUri()
+                            + " reason=" + ex.getMessage(),
+                    ex
+            );
+        }
     }
 
     /**
@@ -89,6 +98,37 @@ public final class ReverseProxyClient {
      */
     private static boolean isForwardable(String headerName) {
         return !HOP_BY_HOP_HEADERS.contains(headerName.toLowerCase());
+    }
+
+    private static boolean isManagedForwardedHeader(String headerName) {
+        String normalized = headerName.toLowerCase();
+        return "x-forwarded-for".equals(normalized) || "x-forwarded-proto".equals(normalized);
+    }
+
+    private static String resolveForwardedFor(ProxyRequest request) {
+        String existing = firstHeaderValue(request.getHeaders(), "X-Forwarded-For");
+        if (existing == null || existing.isBlank()) {
+            return request.getClientIp();
+        }
+        return existing;
+    }
+
+    private static String resolveForwardedProto(ProxyRequest request) {
+        String existing = firstHeaderValue(request.getHeaders(), "X-Forwarded-Proto");
+        if (existing == null || existing.isBlank()) {
+            return request.getTargetUri().getScheme();
+        }
+        return existing;
+    }
+
+    private static String firstHeaderValue(Map<String, List<String>> headers, String headerName) {
+        return headers.entrySet().stream()
+                .filter(entry -> headerName.equalsIgnoreCase(entry.getKey()))
+                .findFirst()
+                .map(Map.Entry::getValue)
+                .filter(values -> !values.isEmpty())
+                .map(values -> values.get(0))
+                .orElse(null);
     }
 
     /**

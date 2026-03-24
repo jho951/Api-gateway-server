@@ -27,7 +27,7 @@ public final class GlobalResponse<T> {
         }
         return new GlobalResponse<>(
                 successCode.getHttpStatus(),
-                successCode.isSuccess(),
+                true,
                 successCode.getMessage(),
                 successCode.getCode(),
                 data
@@ -44,7 +44,7 @@ public final class GlobalResponse<T> {
         }
         return new GlobalResponse<>(
                 errorCode.getHttpStatus(),
-                errorCode.isSuccess(),
+                false,
                 errorCode.getMessage(),
                 errorCode.getCode(),
                 null

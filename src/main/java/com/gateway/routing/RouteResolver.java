@@ -27,7 +27,7 @@ public final class RouteResolver {
         return routes.stream()
                 .filter(route -> route.matches(requestPath))
                 .findFirst()
-                .map(route -> new RouteMatch(route, rewriteUri(route.targetBaseUri(), requestPath, query)))
+                .map(route -> new RouteMatch(route, rewriteUri(route.targetBaseUri(), route.rewritePath(requestPath), query)))
                 .orElse(null);
     }
 

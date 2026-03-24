@@ -16,43 +16,36 @@ import java.util.Map;
 /**
  * {@link HttpExchange} 를 다루기 쉬운 메서드로 감싼 어댑터입니다.
  *
- * <p>핸들러 내부가 JDK HTTP 서버의 저수준 API에 과도하게 결합되지 않도록
- * 요청 본문 읽기, JSON 응답 작성, 스트림 응답 전송을 이 클래스로 위임합니다.</p>
+ * <p>핸들러 내부가 JDK HTTP 서버의 저수준 API에 과도하게 결합되지 않도록 요청 본문 읽기, JSON 응답 작성, 스트림 응답 전송을 이 클래스로 위임합니다.</p>
  */
 public final class ExchangeAdapter {
     private final HttpExchange exchange;
 
     /**
+     * 생성자
+     *
      * @param exchange 현재 요청/응답 교환 객체
      */
     public ExchangeAdapter(HttpExchange exchange) {
         this.exchange = exchange;
     }
 
-    /**
-     * @return HTTP 메서드
-     */
+    /** @return HTTP 메서드*/
     public String method() {
         return exchange.getRequestMethod();
     }
 
-    /**
-     * @return 요청 URI
-     */
+    /** @return 요청 URI */
     public URI uri() {
         return exchange.getRequestURI();
     }
 
-    /**
-     * @return 요청 헤더
-     */
+    /** @return 요청 헤더 */
     public Headers requestHeaders() {
         return exchange.getRequestHeaders();
     }
 
-    /**
-     * @return 원격 클라이언트 주소
-     */
+    /** @return 원격 클라이언트 주소 */
     public InetSocketAddress remoteAddress() {
         return exchange.getRemoteAddress();
     }
@@ -115,9 +108,7 @@ public final class ExchangeAdapter {
         }
     }
 
-    /**
-     * 현재 exchange 를 종료합니다.
-     */
+    /** 현재 exchange 를 종료합니다. */
     public void close() {
         exchange.close();
     }

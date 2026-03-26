@@ -1,6 +1,8 @@
 package com.gateway.auth;
 
-import com.gateway.api.InternalServiceApi;
+import com.gateway.contract.internal.header.ServiceHeaders;
+import com.gateway.contract.internal.header.TraceHeaders;
+import com.gateway.contract.internal.path.ServicePaths;
 
 import java.io.IOException;
 import java.net.URI;
@@ -13,7 +15,11 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 보호 경로 진입 전에 Auth Service에 인증 검증을 위임합니다.
+ * 인증 서비스(Auth Service)와 통신하여 세션의 유효성을 검증하는 HTTP 클라이언트입니다.
+ * <p>
+ * 외부 JSON 라이브러리 의존성을 제거하기 위해 정규표현식을 사용하여 응답을 파싱하며,
+ * 게이트웨이의 성능을 위해 비동기 처리에 적합한 Java 표준 HttpClient를 사용합니다.
+ * </p>
  */
 public final class AuthServiceClient {
     private static final Pattern BOOLEAN_FIELD = Pattern.compile("\"authenticated\"\\s*:\\s*(true|false)");
@@ -24,6 +30,43 @@ public final class AuthServiceClient {
     private final HttpClient client;
     private final Duration timeout;
 
+    /**
+     * 응답 헤더에서 특정 이름을 가진 첫 번째 값을 추출합니다.
+     * @param response HTTP 응답 객체
+     * @param headerName 찾고자 하는 헤더 이름
+     * @return 헤더 값 (없을 경우 null)
+     */
+    private String firstHeader(HttpResponse<?> response, String headerName) {
+        Optional<String> header = response.headers().firstValue(headerName);
+        return header.orElse(null);
+    }
+
+    /**
+     * JSON 응답 바디에서 'authenticated' 필드의 불리언 값을 확인합니다.
+     * @param responseBody JSON 문자열
+     * @return 인증 성공 여부 (매칭 실패 시 false)
+     */
+    private boolean isAuthenticated(String responseBody) {
+        Matcher matcher = BOOLEAN_FIELD.matcher(responseBody);
+        return matcher.find() && Boolean.parseBoolean(matcher.group(1));
+    }
+
+    /**
+     * 지정된 패턴을 사용하여 JSON 응답 바디에서 특정 문자열 필드 값을 추출합니다.
+     * @param responseBody JSON 문자열
+     * @param pattern 추출할 필드에 대한 정규표현식 패턴
+     * @return 추출된 문자열 (매칭 실패 시 null)
+     */
+    private String firstJsonField(String responseBody, Pattern pattern) {
+        Matcher matcher = pattern.matcher(responseBody);
+        if (!matcher.find()) return null;
+        return matcher.group(1);
+    }
+
+    /**
+     * 생성자 (생성자 호출로 직접 생성이 불가해 Builder 패턴 적용)
+     * @param timeout 연결 및 요청 타임아웃 설정 시간
+     */
     public AuthServiceClient(Duration timeout) {
         this.client = HttpClient.newBuilder()
                 .connectTimeout(timeout)
@@ -32,63 +75,68 @@ public final class AuthServiceClient {
         this.timeout = timeout;
     }
 
+    /**
+     * 인증 서비스에 세션 검증 요청을 보내고 결과를 AuthResult로 반환합니다.
+     * <p>
+     * 1. 인증 서비스의 검증 API 호출<br>
+     * 2. 응답 바디 또는 헤더에서 사용자 정보(ID, Role, SessionID) 추출<br>
+     * 3. HTTP 상태 코드와 인증 필드를 종합하여 최종 결과 생성
+     * </p>
+     * @param authServiceBaseUri 인증 서비스의 베이스 URI
+     * @param authorizationHeader 클라이언트가 보낸 Authorization 헤더 (Bearer 토큰 등)
+     * @param requestId 요청 추적을 위한 고유 ID
+     * @param correlationId 연관 관계 추적을 위한 ID
+     * @return 인증 성공 여부 및 사용자 정보가 담긴 {@link AuthResult}
+     * @throws IOException 네트워크 오류 발생 시
+     * @throws InterruptedException 요청 중단 시
+     */
     public AuthResult validateSession(
             URI authServiceBaseUri,
             String authorizationHeader,
             String requestId,
             String correlationId
     ) throws IOException, InterruptedException {
-        URI targetUri = authServiceBaseUri.resolve(InternalServiceApi.Auth.SESSION_VALIDATE);
+        // 검증 엔드포인트 경로 해석
+        URI targetUri = authServiceBaseUri.resolve(ServicePaths.Auth.SESSION_VALIDATE);
 
+        // 요청 구성
         HttpRequest request = HttpRequest.newBuilder(targetUri)
                 .timeout(timeout)
-                .POST(HttpRequest.BodyPublishers.noBody())
+                .POST(HttpRequest.BodyPublishers.noBody()) // 본문 없이 POST 요청
                 .header("Authorization", authorizationHeader)
-                .header(InternalServiceApi.Headers.REQUEST_ID, requestId)
-                .header(InternalServiceApi.Headers.CORRELATION_ID, correlationId)
+                .header(TraceHeaders.REQUEST_ID, requestId)
+                .header(TraceHeaders.CORRELATION_ID, correlationId)
                 .build();
 
+        // 요청 전송 및 응답 수신
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
         String responseBody = response.body() == null ? "" : response.body();
+
+        // 1. User ID 추출 (JSON 바디 -> 없으면 헤더 확인)
         String userId = firstJsonField(responseBody, USER_ID_FIELD);
         if (userId == null || userId.isBlank()) {
-            userId = firstHeader(response, InternalServiceApi.Headers.USER_ID);
+            userId = firstHeader(response, ServiceHeaders.Trusted.USER_ID);
         }
 
+        // 2. Role 추출 (JSON 바디 -> 없으면 헤더 확인)
         String role = firstJsonField(responseBody, ROLE_FIELD);
         if (role == null || role.isBlank()) {
-            role = firstHeader(response, InternalServiceApi.Headers.USER_ROLE);
+            role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
         }
 
+        // 3. Session ID 추출 (JSON 바디 -> 없으면 헤더 확인)
         String sessionId = firstJsonField(responseBody, SESSION_ID_FIELD);
         if (sessionId == null || sessionId.isBlank()) {
-            sessionId = firstHeader(response, InternalServiceApi.Headers.SESSION_ID);
+            sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
         }
 
+        // 최종 인증 여부 판별
         boolean authenticated = response.statusCode() == 200
                 && isAuthenticated(responseBody)
                 && userId != null
                 && !userId.isBlank();
 
         return new AuthResult(response.statusCode(), authenticated, userId, role, sessionId);
-    }
-
-    private String firstHeader(HttpResponse<?> response, String headerName) {
-        Optional<String> header = response.headers().firstValue(headerName);
-        return header.orElse(null);
-    }
-
-    private boolean isAuthenticated(String responseBody) {
-        Matcher matcher = BOOLEAN_FIELD.matcher(responseBody);
-        return matcher.find() && Boolean.parseBoolean(matcher.group(1));
-    }
-
-    private String firstJsonField(String responseBody, Pattern pattern) {
-        Matcher matcher = pattern.matcher(responseBody);
-        if (!matcher.find()) {
-            return null;
-        }
-        return matcher.group(1);
     }
 }

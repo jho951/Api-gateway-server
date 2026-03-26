@@ -8,11 +8,12 @@
 - Gateway는 외부 요청의 단일 진입점입니다.
 - 외부 사용자가 보는 흐름은 `public`, `protected` 두 가지가 중심입니다.
 - `/auth`, `/api/users`, `/internal/users`, `/api/documents` 같은 경로를 각 내부 서비스로 전달합니다.
-- 보호 경로에서는 `Authorization` 헤더를 검사한 뒤 auth-service의 내부 검증 경로로 인증을 확인하고, `X-User-Id`는 게이트웨이가 내부적으로 재구성합니다.
-- 현재 구현은 JWT 형식 선검증 후 auth-service 검증을 거쳐 user id를 주입합니다.
+- 보호 경로에서는 `Authorization` 헤더의 JWT를 gateway가 공유 비밀 키 또는 auth-service 공개키로 서명/만료만 검증하고, 성공 시 JWT의 사용자 claim을 바탕으로 `X-User-Id`를 내부 서비스에 주입합니다. 실제 로그인/권한/세션 상태와 리프레시 토큰 관리는 auth-service가 Redis 기반으로 단독 관리합니다.
+- 현재 구현은 JWT 포맷 선검증 후 gateway 내부에서 서명/유효기간만 확인하고, auth-service에 대한 별도 세션 검증 호출 없이 downstream에 전달합니다.
 - 권한 검증은 아직 게이트웨이에서 강제되지 않습니다.
 - auth-service 관련 `/auth/**`, `/oauth2/**`, `/login/oauth2/**` 경로는 rewrite 없이 그대로 프록시합니다.
 - auth-service 관련 `Set-Cookie`, `Cookie`, `Location`, `302`, `204` 응답은 그대로 통과시킵니다.
+- 리프레시 토큰은 gateway가 저장하거나 Redis에 접근하지 않고, `/auth/refresh` 요청은 그대로 auth-service로 프록시되어 갱신/저장을 auth-service만 수행합니다.
 - credentials 기반 브라우저 호출을 위해 CORS는 명시 origin + `Access-Control-Allow-Credentials: true` 기준으로 동작합니다.
 - `user-service` 공개 API는 `/api/users/**`로, 내부 API는 `/internal/users/**`로 유지합니다.
 - `user-service` 라우트에는 `Authorization` 헤더를 그대로 전달하고, 내부 사용자 API는 허용된 내부 IP 대역에서만 통과시킵니다.
@@ -21,6 +22,21 @@
 
 ## 세부 문서
 [WIKI](https://github.com/jho951/Api-gateway-server/wiki/)
+
+## JWT 검증
+
+- 보호 경로에서 들어오는 `Authorization: Bearer` JWT는 gateway가 공유 비밀 키(HS256/HS384/HS512) 또는 auth-service의 공개키(RS256/RS384/RS512)로 서명과 `iss`/`aud`/`exp` 클레임을 검증한 뒤에 `sub`/`userId` 같은 사용자 claim을 `X-User-Id`로 재구성하여 하위 서비스로 전달합니다. 로그인 · 권한 · 리프레시 상태는 Redis 기반의 auth-service가 단독으로 관리하며, gateway는 세션 상태를 직접 조회하지 않습니다.
+
+### 환경 변수
+
+- `AUTH_JWT_VERIFY_ENABLED`: `true`로 설정하면 서명 검증을 시도합니다. 기본값은 `false`이며, 키를 제공하지 않으면 인증 전 검증을 건너뜁니다.
+- `AUTH_JWT_PUBLIC_KEY_PEM`: auth-service의 공개키 PEM 텍스트입니다. 여러 줄이라면 `\n`과 함께 큰따옴표로 감싸서 넣어주세요. RS 계열 알고리즘을 사용할 때 제공해야 합니다.
+- `AUTH_JWT_SHARED_SECRET`: HS256/HS384/HS512 같은 HS 계열 알고리즘을 검증할 때 사용하는 대칭 키입니다. `AUTH_JWT_ALGORITHM`이 HS 계열일 경우 필수입니다.
+- `AUTH_JWT_KEY_ID`: JWT 헤더의 `kid`와 비교해 특정 키만 허용하도록 합니다([선택 사항](https://www.rfc-editor.org/rfc/rfc7515)).
+- `AUTH_JWT_ALGORITHM`: 기대하는 JWT `alg` 값(RS256, RS384, RS512, HS256, HS384, HS512 중 하나). 기본값은 `RS256`입니다.
+- `AUTH_JWT_ISSUER`: `iss` 클레임이 반드시 이 값과 일치해야 인증을 성공으로 판단합니다([선택 사항]).
+- `AUTH_JWT_AUDIENCE`: `aud` 클레임에 이 값을 반드시 포함시켜야 합니다([선택 사항], 문자열 또는 배열 모두 지원).
+- `AUTH_JWT_CLOCK_SKEW_SECONDS`: `exp` 비교 시 허용할 최대 시계 차 입니다. 기본값은 `30`.
 
 ## Response Codes
 

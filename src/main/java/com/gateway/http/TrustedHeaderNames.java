@@ -1,6 +1,7 @@
 package com.gateway.http;
 
-import com.gateway.api.InternalServiceApi;
+import com.gateway.contract.internal.header.ServiceHeaders;
+import com.gateway.contract.internal.header.TraceHeaders;
 
 import java.util.Set;
 
@@ -10,11 +11,11 @@ public final class TrustedHeaderNames {
     private TrustedHeaderNames() {}
 
     public static final Set<String> ALL = Set.of(
-            InternalServiceApi.Headers.USER_ID.toLowerCase(),
-            InternalServiceApi.Headers.USER_ROLE.toLowerCase(),
-            InternalServiceApi.Headers.SESSION_ID.toLowerCase(),
-            InternalServiceApi.Headers.REQUEST_ID.toLowerCase(),
-            InternalServiceApi.Headers.CORRELATION_ID.toLowerCase(),
+            ServiceHeaders.Trusted.USER_ID.toLowerCase(),
+            ServiceHeaders.Trusted.USER_ROLE.toLowerCase(),
+            ServiceHeaders.Trusted.SESSION_ID.toLowerCase(),
+            TraceHeaders.REQUEST_ID.toLowerCase(),
+            TraceHeaders.CORRELATION_ID.toLowerCase(),
             "x-auth-user-id",
             "x-auth-session-id",
             "x-auth-roles",

@@ -1,6 +1,7 @@
 package com.gateway.auth;
 
-import com.gateway.api.InternalServiceApi;
+import com.gateway.contract.internal.header.ServiceHeaders;
+import com.gateway.contract.internal.header.TraceHeaders;
 
 import java.io.IOException;
 import java.net.URI;
@@ -33,13 +34,13 @@ public final class PermissionServiceClient {
         HttpRequest request = HttpRequest.newBuilder(verifyUri)
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.noBody())
-                .header(InternalServiceApi.Headers.ORIGINAL_METHOD, method)
-                .header(InternalServiceApi.Headers.ORIGINAL_PATH, path)
-                .header(InternalServiceApi.Headers.REQUEST_ID, requestId)
-                .header(InternalServiceApi.Headers.CORRELATION_ID, correlationId)
-                .header(InternalServiceApi.Headers.USER_ID, authResult.getUserId())
-                .header(InternalServiceApi.Headers.USER_ROLE, authResult.getRole())
-                .header(InternalServiceApi.Headers.SESSION_ID, authResult.getSessionId())
+                .header(ServiceHeaders.Forwarded.ORIGINAL_METHOD, method)
+                .header(ServiceHeaders.Forwarded.ORIGINAL_PATH, path)
+                .header(TraceHeaders.REQUEST_ID, requestId)
+                .header(TraceHeaders.CORRELATION_ID, correlationId)
+                .header(ServiceHeaders.Trusted.USER_ID, authResult.getUserId())
+                .header(ServiceHeaders.Trusted.USER_ROLE, authResult.getRole())
+                .header(ServiceHeaders.Trusted.SESSION_ID, authResult.getSessionId())
                 .build();
 
         HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());

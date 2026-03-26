@@ -8,9 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 실행 프로필과 env 파일을 해석해 애플리케이션 설정 입력을 구성합니다.
- */
+/** 실행 프로필과 env 파일을 해석해 애플리케이션 설정 입력을 구성합니다. */
 public final class RuntimeEnvironment {
     private RuntimeEnvironment() {}
 

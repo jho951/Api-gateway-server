@@ -9,7 +9,6 @@ import java.util.List;
  * 문자열 기반 설정 해석 로직을 이 클래스로 집중시키는 것을 의도합니다.</p>
  */
 public final class EnvParsers {
-    /** 인스턴스화 방지 */
     private EnvParsers() {}
 
     /**

@@ -1,11 +1,12 @@
 package com.gateway.auth;
 
-import com.gateway.api.InternalServiceApi;
+import com.gateway.contract.internal.header.ServiceHeaders;
+import com.gateway.contract.internal.header.TraceHeaders;
 
 import java.util.List;
 import java.util.Map;
 
-/** 내부 Auth 서비스의 세션 검증 결과입니다. */
+/** auth-service의  검증 결과를 내부적으로 담아두는 DTO */
 public final class AuthResult {
     private final int statusCode;
     private final boolean authenticated;
@@ -15,7 +16,6 @@ public final class AuthResult {
 
     /**
      * 생성자
-     *
      * @param statusCode Auth 서비스 응답 코드
      * @param authenticated 인증 성공 여부
      * @param userId 인증된 사용자 ID
@@ -30,37 +30,26 @@ public final class AuthResult {
         this.sessionId = sessionId;
     }
 
-    public int getStatusCode() {
-        return statusCode;
-    }
-
-    public boolean isAuthenticated() {
-        return authenticated;
-    }
-
+    public int getStatusCode() {return statusCode;}
+    public boolean isAuthenticated() {return authenticated;}
     public String getUserId() {
         return userId;
     }
-
     public String getRole() {
         return role;
     }
-
-    public String getSessionId() {
-        return sessionId;
-    }
-
+    public String getSessionId() {return sessionId;}
     public boolean isAdmin() {
         return "ADMIN".equalsIgnoreCase(role);
     }
 
     public Map<String, List<String>> toTrustedHeaders(String requestId, String correlationId) {
         return Map.of(
-                InternalServiceApi.Headers.USER_ID, List.of(userId),
-                InternalServiceApi.Headers.USER_ROLE, List.of(role),
-                InternalServiceApi.Headers.SESSION_ID, List.of(sessionId),
-                InternalServiceApi.Headers.REQUEST_ID, List.of(requestId),
-                InternalServiceApi.Headers.CORRELATION_ID, List.of(correlationId)
+                ServiceHeaders.Trusted.USER_ID, List.of(userId),
+                ServiceHeaders.Trusted.USER_ROLE, List.of(role),
+                ServiceHeaders.Trusted.SESSION_ID, List.of(sessionId),
+                TraceHeaders.REQUEST_ID, List.of(requestId),
+                TraceHeaders.CORRELATION_ID, List.of(correlationId)
         );
     }
 }

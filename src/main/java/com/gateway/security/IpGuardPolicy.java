@@ -37,9 +37,7 @@ public final class IpGuardPolicy {
      * @return 허용되면 {@code true}
      */
     public boolean allows(String clientIp) {
-        if (!enabled) {
-            return true;
-        }
+        if (!enabled) return true;
         return engine.decide(clientIp).allowed();
     }
 }

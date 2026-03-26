@@ -3,13 +3,12 @@ package com.gateway.routing;
 import java.net.URI;
 import java.util.List;
 
-/**
- * 요청 경로를 정책 라우트와 업스트림 URI로 해석합니다.
- */
+/** 요청 경로를 정책 라우트와 업스트림 URI로 해석합니다. */
 public final class RouteResolver {
     private final List<RouteDefinition> routes;
 
     /**
+     * 생성자
      * @param routes 우선순위 정렬이 끝난 라우트 목록
      */
     public RouteResolver(List<RouteDefinition> routes) {
@@ -43,9 +42,7 @@ public final class RouteResolver {
 
     private String combinePaths(String basePath, String requestPath) {
         String normalizedBase = (basePath == null || basePath.isBlank()) ? "" : basePath;
-        if (normalizedBase.endsWith("/")) {
-            normalizedBase = normalizedBase.substring(0, normalizedBase.length() - 1);
-        }
+        if (normalizedBase.endsWith("/")) normalizedBase = normalizedBase.substring(0, normalizedBase.length() - 1);
         return normalizedBase + requestPath;
     }
 }

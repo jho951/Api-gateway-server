@@ -4,9 +4,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * 간단한 고정 윈도우 기반 인메모리 rate limiter 입니다.
- */
+/** 간단한 고정 윈도우 기반 인메모리 rate limiter 입니다. */
 public final class RequestWindowRateLimiter {
     private final Map<String, Window> windows = new ConcurrentHashMap<>();
     private final int maxRequests;

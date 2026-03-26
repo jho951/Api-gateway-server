@@ -4,7 +4,7 @@ import java.net.URI;
 import java.util.Comparator;
 
 /**
- * 게이트웨이의 정적 라우팅 규칙입니다.
+ * 게이트웨이의 정적 라우팅 규칙
  *
  * @param pathPattern 매칭할 경로 패턴. {@code /foo/**} 또는 exact path
  * @param routeType 공개/보호/관리자/내부 경로 구분

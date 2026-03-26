@@ -1,6 +1,9 @@
 package com.gateway.config;
 
-import com.gateway.api.GatewayApiPaths;
+import com.gateway.contract.external.path.AuthApiPaths;
+import com.gateway.contract.external.path.DocumentApiPaths;
+import com.gateway.contract.external.path.InternalApiPaths;
+import com.gateway.contract.external.path.UserApiPaths;
 import com.gateway.routing.RouteDefinition;
 import com.gateway.routing.RouteType;
 import com.gateway.security.IpGuardPolicy;
@@ -12,9 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * API Gateway 런타임 설정의 불변 표현입니다.
- */
+/** API Gateway 런타임 설정의 불변 표현입니다. */
 public final class GatewayConfig {
     private final InetSocketAddress bindAddress;
     private final Duration requestTimeout;
@@ -44,6 +45,19 @@ public final class GatewayConfig {
     private final String permissionCacheKeyPrefix;
     private final List<RouteDefinition> routes;
 
+    private final boolean authJwtVerifyEnabled;
+    private final String authJwtPublicKeyPem;
+    private final String authJwtSharedSecret;
+    private final String authJwtKeyId;
+    private final String authJwtAlgorithm;
+    private final String authJwtIssuer;
+    private final String authJwtAudience;
+    private final long authJwtClockSkewSeconds;
+    private final boolean sessionCacheEnabled;
+    private final int sessionLocalCacheTtlSeconds;
+    private final int sessionCacheTtlSeconds;
+    private final String sessionCacheKeyPrefix;
+
     private GatewayConfig(
             InetSocketAddress bindAddress,
             Duration requestTimeout,
@@ -71,7 +85,19 @@ public final class GatewayConfig {
             int redisTimeoutMs,
             int permissionCacheTtlSeconds,
             String permissionCacheKeyPrefix,
-            List<RouteDefinition> routes
+            boolean sessionCacheEnabled,
+            int sessionLocalCacheTtlSeconds,
+            int sessionCacheTtlSeconds,
+            String sessionCacheKeyPrefix,
+            List<RouteDefinition> routes,
+            boolean authJwtVerifyEnabled,
+            String authJwtPublicKeyPem,
+            String authJwtSharedSecret,
+            String authJwtKeyId,
+            String authJwtAlgorithm,
+            String authJwtIssuer,
+            String authJwtAudience,
+            long authJwtClockSkewSeconds
     ) {
         this.bindAddress = bindAddress;
         this.requestTimeout = requestTimeout;
@@ -99,7 +125,19 @@ public final class GatewayConfig {
         this.redisTimeoutMs = redisTimeoutMs;
         this.permissionCacheTtlSeconds = permissionCacheTtlSeconds;
         this.permissionCacheKeyPrefix = permissionCacheKeyPrefix;
+        this.sessionCacheEnabled = sessionCacheEnabled;
+        this.sessionLocalCacheTtlSeconds = sessionLocalCacheTtlSeconds;
+        this.sessionCacheTtlSeconds = sessionCacheTtlSeconds;
+        this.sessionCacheKeyPrefix = sessionCacheKeyPrefix;
         this.routes = routes;
+        this.authJwtVerifyEnabled = authJwtVerifyEnabled;
+        this.authJwtPublicKeyPem = authJwtPublicKeyPem;
+        this.authJwtSharedSecret = authJwtSharedSecret;
+        this.authJwtKeyId = authJwtKeyId;
+        this.authJwtAlgorithm = authJwtAlgorithm;
+        this.authJwtIssuer = authJwtIssuer;
+        this.authJwtAudience = authJwtAudience;
+        this.authJwtClockSkewSeconds = authJwtClockSkewSeconds;
     }
 
     /**
@@ -127,6 +165,23 @@ public final class GatewayConfig {
         int redisTimeoutMs = parseInt(env.get("REDIS_TIMEOUT_MS"), 1000, "REDIS_TIMEOUT_MS");
         int permissionCacheTtlSeconds = parseInt(env.get("GATEWAY_PERMISSION_CACHE_TTL_SECONDS"), 300, "GATEWAY_PERMISSION_CACHE_TTL_SECONDS");
         String permissionCacheKeyPrefix = env.getOrDefault("GATEWAY_PERMISSION_CACHE_PREFIX", "gateway:admin-permission:");
+        boolean sessionCacheEnabled = parseBoolean(env.get("GATEWAY_SESSION_CACHE_ENABLED"), true);
+        int sessionLocalCacheTtlSeconds = parseInt(env.get("GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS"), 3, "GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS");
+        int sessionCacheTtlSeconds = parseInt(env.get("GATEWAY_SESSION_CACHE_TTL_SECONDS"), 60, "GATEWAY_SESSION_CACHE_TTL_SECONDS");
+        String sessionCacheKeyPrefix = env.getOrDefault("GATEWAY_SESSION_CACHE_KEY_PREFIX", "gateway:session:");
+
+        boolean rawAuthJwtVerifyEnabled = parseBoolean(env.get("AUTH_JWT_VERIFY_ENABLED"), false);
+        String authJwtPublicKeyPem = nullIfBlank(env.get("AUTH_JWT_PUBLIC_KEY_PEM"));
+        String authJwtSharedSecret = nullIfBlank(env.get("AUTH_JWT_SHARED_SECRET"));
+        boolean authJwtVerifyEnabled = rawAuthJwtVerifyEnabled && (authJwtPublicKeyPem != null || authJwtSharedSecret != null);
+        if (rawAuthJwtVerifyEnabled && authJwtPublicKeyPem == null && authJwtSharedSecret == null) {
+            throw new IllegalArgumentException("AUTH_JWT_PUBLIC_KEY_PEM or AUTH_JWT_SHARED_SECRET must be configured when AUTH_JWT_VERIFY_ENABLED is true");
+        }
+        String authJwtKeyId = env.get("AUTH_JWT_KEY_ID");
+        String authJwtAlgorithm = env.getOrDefault("AUTH_JWT_ALGORITHM", "RS256");
+        String authJwtIssuer = env.get("AUTH_JWT_ISSUER");
+        String authJwtAudience = env.get("AUTH_JWT_AUDIENCE");
+        int authJwtClockSkewSeconds = parseInt(env.get("AUTH_JWT_CLOCK_SKEW_SECONDS"), 30, "AUTH_JWT_CLOCK_SKEW_SECONDS");
 
         URI authServiceUri = requiredUri(env.get("AUTH_SERVICE_URL"), "AUTH_SERVICE_URL");
         URI userServiceUri = requiredUri(env.get("USER_SERVICE_URL"), "USER_SERVICE_URL");
@@ -147,7 +202,11 @@ public final class GatewayConfig {
                 EnvParsers.csvOrDefault(env.get("GATEWAY_INTERNAL_ALLOWED_IPS"), List.of("127.0.0.1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")),
                 parseBoolean(env.get("GATEWAY_INTERNAL_IP_GUARD_DEFAULT_ALLOW"), false)
         );
-        IpGuardPolicy adminIpPolicy = new IpGuardPolicy(false, List.of("*"), true);
+        IpGuardPolicy adminIpPolicy = new IpGuardPolicy(
+                parseBoolean(env.get("GATEWAY_ADMIN_IP_GUARD_ENABLED"), true),
+                EnvParsers.csvOrDefault(env.get("GATEWAY_ADMIN_ALLOWED_IPS"), List.of("127.0.0.1")),
+                parseBoolean(env.get("GATEWAY_ADMIN_IP_GUARD_DEFAULT_ALLOW"), false)
+        );
 
         List<RouteDefinition> routes = buildRoutes(authServiceUri, userServiceUri, blockServiceUri, permissionServiceUri);
 
@@ -178,7 +237,19 @@ public final class GatewayConfig {
                 redisTimeoutMs,
                 permissionCacheTtlSeconds,
                 permissionCacheKeyPrefix,
-                routes
+                sessionCacheEnabled,
+                sessionLocalCacheTtlSeconds,
+                sessionCacheTtlSeconds,
+                sessionCacheKeyPrefix,
+                routes,
+                authJwtVerifyEnabled,
+                authJwtPublicKeyPem,
+                authJwtSharedSecret,
+                authJwtKeyId,
+                authJwtAlgorithm,
+                authJwtIssuer,
+                authJwtAudience,
+                authJwtClockSkewSeconds
         );
     }
 
@@ -189,33 +260,35 @@ public final class GatewayConfig {
             URI permissionServiceUri
     ) {
         List<RouteDefinition> routes = new ArrayList<>();
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_INTERNAL_ALL, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.INTERNAL_ALL, RouteType.INTERNAL, "internal", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_LOGIN, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_LOGIN_GITHUB, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_OAUTH2_AUTHORIZE_ALL, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_OAUTH_GITHUB_CALLBACK, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_SSO_START, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_EXCHANGE, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_REFRESH, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_LOGOUT, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.OAUTH2_AUTHORIZATION_ALL, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.LOGIN_OAUTH2_CALLBACK_ALL, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_SESSION, RouteType.PROTECTED, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.AUTH_ME, RouteType.PUBLIC, "auth", authServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.USERS_SIGNUP, RouteType.PUBLIC, "user", userServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.USERS_ME, RouteType.PUBLIC, "user", userServiceUri));
-        routes.add(new RouteDefinition(GatewayApiPaths.INTERNAL_USERS_ALL, RouteType.INTERNAL, "user", userServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.INTERNAL_ALL, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.LOGIN, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.LOGIN_GITHUB, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZE_ALL, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.OAUTH_GITHUB_CALLBACK, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.SSO_START, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.EXCHANGE, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.REFRESH, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.LOGOUT, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZATION_ALL, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.LOGIN_OAUTH2_CALLBACK_ALL, RouteType.PUBLIC, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.SESSION, RouteType.PROTECTED, "auth", authServiceUri));
+        routes.add(new RouteDefinition(AuthApiPaths.ME, RouteType.PUBLIC, "auth", authServiceUri));
+
+        routes.add(new RouteDefinition(InternalApiPaths.INTERNAL_ALL, RouteType.INTERNAL, "internal", authServiceUri));
+
+        routes.add(new RouteDefinition(UserApiPaths.SIGNUP, RouteType.PUBLIC, "user", userServiceUri));
+        routes.add(new RouteDefinition(UserApiPaths.ME, RouteType.PUBLIC, "user", userServiceUri));
+        routes.add(new RouteDefinition(UserApiPaths.INTERNAL_USERS_ALL, RouteType.INTERNAL, "user", userServiceUri));
         routes.add(new RouteDefinition(
-                GatewayApiPaths.DOCUMENTS_ALL,
+                DocumentApiPaths.ALL,
                 RouteType.PROTECTED,
                 "block",
                 blockServiceUri,
                 "/api/documents"
         ));
-        if (permissionServiceUri != null) {
-            routes.add(new RouteDefinition(GatewayApiPaths.PERMISSIONS_ALL, RouteType.PROTECTED, "permission", permissionServiceUri));
-        }
+//        if (permissionServiceUri != null) {
+//            routes.add(new RouteDefinition(PermissionApiPaths.ALL, RouteType.PROTECTED, "permission", permissionServiceUri));
+//        }
         routes.sort(RouteDefinition.MOST_SPECIFIC_FIRST);
         return List.copyOf(routes);
     }
@@ -255,6 +328,13 @@ public final class GatewayConfig {
             return defaultValue;
         }
         return Boolean.parseBoolean(rawValue.trim());
+    }
+
+    private static String nullIfBlank(String rawValue) {
+        if (rawValue == null || rawValue.isBlank()) {
+            return null;
+        }
+        return rawValue;
     }
 
     public InetSocketAddress bindAddress() {
@@ -359,6 +439,54 @@ public final class GatewayConfig {
 
     public String permissionCacheKeyPrefix() {
         return permissionCacheKeyPrefix;
+    }
+
+    public boolean sessionCacheEnabled() {
+        return sessionCacheEnabled;
+    }
+
+    public int sessionLocalCacheTtlSeconds() {
+        return sessionLocalCacheTtlSeconds;
+    }
+
+    public int sessionCacheTtlSeconds() {
+        return sessionCacheTtlSeconds;
+    }
+
+    public String sessionCacheKeyPrefix() {
+        return sessionCacheKeyPrefix;
+    }
+
+    public boolean authJwtVerifyEnabled() {
+        return authJwtVerifyEnabled;
+    }
+
+    public String authJwtPublicKeyPem() {
+        return authJwtPublicKeyPem;
+    }
+
+    public String authJwtSharedSecret() {
+        return authJwtSharedSecret;
+    }
+
+    public String authJwtKeyId() {
+        return authJwtKeyId;
+    }
+
+    public String authJwtAlgorithm() {
+        return authJwtAlgorithm;
+    }
+
+    public String authJwtIssuer() {
+        return authJwtIssuer;
+    }
+
+    public String authJwtAudience() {
+        return authJwtAudience;
+    }
+
+    public long authJwtClockSkewSeconds() {
+        return authJwtClockSkewSeconds;
     }
 
     public List<RouteDefinition> routes() {

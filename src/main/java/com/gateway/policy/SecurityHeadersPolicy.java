@@ -11,7 +11,6 @@ import com.sun.net.httpserver.Headers;
 public final class SecurityHeadersPolicy {
     /**
      * 공통 보안 헤더를 응답에 씁니다.
-     *
      * @param headers 응답 헤더 객체
      */
     public void apply(Headers headers) {

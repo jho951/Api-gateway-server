@@ -149,7 +149,7 @@ public final class GatewayConfig {
     public static GatewayConfig fromEnv(Map<String, String> env) {
         String host = env.getOrDefault("GATEWAY_BIND", "0.0.0.0");
         int port = parseInt(env.get("GATEWAY_PORT"), 8080, "GATEWAY_PORT");
-        int requestTimeoutMs = parseInt(env.get("GATEWAY_REQUEST_TIMEOUT_MS"), 10_000, "GATEWAY_REQUEST_TIMEOUT_MS");
+        int requestTimeoutMs = parseInt(env.get("GATEWAY_REQUEST_TIMEOUT_MS"), 30_000, "GATEWAY_REQUEST_TIMEOUT_MS");
         int loginRateLimitPerMinute = parseInt(env.get("GATEWAY_LOGIN_RATE_LIMIT_PER_MINUTE"), 20, "GATEWAY_LOGIN_RATE_LIMIT_PER_MINUTE");
         int maxBodyBytes = parseInt(env.get("GATEWAY_MAX_BODY_BYTES"), 1_048_576, "GATEWAY_MAX_BODY_BYTES");
         boolean jwtPrecheckExpEnabled = parseBoolean(env.get("GATEWAY_JWT_PRECHECK_EXP_ENABLED"), false);
@@ -271,6 +271,7 @@ public final class GatewayConfig {
         routes.add(new RouteDefinition(AuthApiPaths.LOGOUT, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZATION_ALL, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.LOGIN_OAUTH2_CALLBACK_ALL, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(AuthApiPaths.JWKS, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.SESSION, RouteType.PROTECTED, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.ME, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.ERROR, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));

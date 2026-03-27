@@ -19,8 +19,8 @@
 ### 흐름
  1. 공개 경로인지 확인해 해당 경로는 바로 통과
 ```text
-/auth/login
-/auth/oauth2/**
+/v1/auth/login
+/v1/auth/oauth2/**
 /health
 일부 공개 문서 조회 API
 ```

@@ -231,8 +231,8 @@ public final class GatewayHandler implements HttpHandler {
         return AuthApiPaths.LOGIN.equals(path)
                 || AuthApiPaths.LOGIN_GITHUB.equals(path)
                 || AuthApiPaths.SSO_START.equals(path)
-                || path.startsWith("/auth/oauth2/authorize/")
-                || path.startsWith("/oauth2/authorization/");
+                || path.startsWith("/v1/auth/oauth2/authorize/")
+                || path.startsWith("/v1/oauth2/authorization/");
     }
 
     private boolean shouldApplyGatewayIpGuard(RouteType routeType) {

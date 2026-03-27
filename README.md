@@ -7,15 +7,15 @@
 
 - Gateway는 외부 요청의 단일 진입점입니다.
 - 외부 사용자가 보는 흐름은 `public`, `protected` 두 가지가 중심입니다.
-- `/auth`, `/api/users`, `/internal/users`, `/api/documents` 같은 경로를 각 내부 서비스로 전달합니다.
+- `/v1/auth`, `/v1/users`, `/v1/internal/users`, `/v1/workspaces`, `/v1/documents`, `/v1/admin` 같은 경로를 각 내부 서비스로 전달합니다.
 - 보호 경로에서는 `Authorization` 헤더의 JWT를 gateway가 공유 비밀 키 또는 auth-service 공개키로 서명/만료만 검증하고, 성공 시 JWT의 사용자 claim을 바탕으로 `X-User-Id`를 내부 서비스에 주입합니다. 실제 로그인/권한/세션 상태와 리프레시 토큰 관리는 auth-service가 Redis 기반으로 단독 관리합니다.
 - 현재 구현은 JWT 포맷 선검증 후 gateway 내부에서 서명/유효기간만 확인하고, auth-service에 대한 별도 세션 검증 호출 없이 downstream에 전달합니다.
 - 권한 검증은 아직 게이트웨이에서 강제되지 않습니다.
-- auth-service 관련 `/auth/**`, `/oauth2/**`, `/login/oauth2/**` 경로는 rewrite 없이 그대로 프록시합니다.
+- auth-service 관련 `/v1/auth/**`, `/v1/oauth2/**`, `/v1/login/oauth2/**` 경로는 rewrite 없이 그대로 프록시합니다.
 - auth-service 관련 `Set-Cookie`, `Cookie`, `Location`, `302`, `204` 응답은 그대로 통과시킵니다.
-- 리프레시 토큰은 gateway가 저장하거나 Redis에 접근하지 않고, `/auth/refresh` 요청은 그대로 auth-service로 프록시되어 갱신/저장을 auth-service만 수행합니다.
+- 리프레시 토큰은 gateway가 저장하거나 Redis에 접근하지 않고, `/v1/auth/refresh` 요청은 그대로 auth-service로 프록시되어 갱신/저장을 auth-service만 수행합니다.
 - credentials 기반 브라우저 호출을 위해 CORS는 명시 origin + `Access-Control-Allow-Credentials: true` 기준으로 동작합니다.
-- `user-service` 공개 API는 `/api/users/**`로, 내부 API는 `/internal/users/**`로 유지합니다.
+- `user-service` 공개 API는 `/v1/users/**`로, 내부 API는 `/v1/internal/users/**`로 유지합니다.
 - `user-service` 라우트에는 `Authorization` 헤더를 그대로 전달하고, 내부 사용자 API는 허용된 내부 IP 대역에서만 통과시킵니다.
 - `internal` 경로는 사용자 기능 API가 아니라 Gateway와 내부 서비스 사이의 계약입니다.
 - `local`과 `prod` 설정은 루트의 `.env.local`, `.env.prod`로 분리되어 있습니다.
@@ -216,7 +216,7 @@ curl -i http://localhost:8082
 4. 로그인 시작 경로 확인
 
 ```bash
-curl -i http://localhost:8080/auth/login/github
+curl -i http://localhost:8080/v1/auth/login/github
 ```
 
 여기서 `502`가 나오면 Gateway에서 업스트림 연결이 실패한 것입니다.
@@ -225,12 +225,12 @@ curl -i http://localhost:8080/auth/login/github
 5. 보호 API 호출 확인
 
 ```bash
-curl -i http://localhost:8080/api/documents/v1/workspaces \
+curl -i http://localhost:8080/v1/workspaces \
   -H "Authorization: Bearer <access-token>"
 ```
 
-문서 API는 외부에서 `/api/documents/**`로 받고, block service에는 `/v1/**`로 rewrite 해서 전달합니다.
-예를 들어 `GET /api/documents/v1/documents/123` 요청은 block service의 `GET /v1/documents/123`로 전달됩니다.
+문서 API는 외부에서 `/v1/workspaces/**`, `/v1/documents/**`, `/v1/admin/**`로 받고 block service에도 동일 경로로 전달합니다.
+예를 들어 `GET /v1/documents/123` 요청은 block service의 `GET /v1/documents/123`로 전달됩니다.
 외부에서 들어온 `X-User-Id`는 신뢰하지 않고 제거하며, 게이트웨이가 auth-service 검증 결과로 내부 `X-User-Id`를 다시 주입합니다.
 기본 설정에서는 downstream 서비스로 `Authorization` 헤더를 전달하지 않습니다.
 보호 경로에서는 아래 순서로 인증을 처리합니다.
@@ -253,19 +253,19 @@ block server는 게이트웨이가 맞춰야 하는 대상이며, 이 계약은 
 - 클라이언트는 Gateway만 호출합니다.
 - 클라이언트는 `Authorization: Bearer <access-token>`만 전송합니다.
 - 클라이언트가 보낸 `X-User-Id`는 무시되고 upstream 전달 전에 제거됩니다.
-- 문서 API 외부 prefix는 항상 `/api/documents/v1/**` 입니다.
+- 문서 API 외부 prefix는 `/v1/workspaces/**`, `/v1/documents/**`, `/v1/admin/**` 입니다.
 
 예:
 
 ```http
-POST /api/documents/v1/workspaces/{workspaceId}/documents
+POST /v1/workspaces/{workspaceId}/documents
 Authorization: Bearer <token>
 Content-Type: application/json
 ```
 
 ### 내부 전달 계약
 
-- Gateway는 `/api/documents` prefix를 제거하고 block server의 `/v1/**`로 전달합니다.
+- Gateway는 문서 요청을 `/v1/**` 경로로 block server에 그대로 전달합니다.
 - Gateway는 내부 `X-User-Id`를 재주입합니다.
 - 기본 설정에서는 `Authorization` 헤더를 downstream 으로 전달하지 않습니다.
 
@@ -282,35 +282,39 @@ Content-Type: application/json
 
 현재 documents/block server로 전달하는 외부 경로는 아래와 같습니다.
 
-- `POST /api/documents/v1/workspaces`
-- `GET /api/documents/v1/workspaces/{workspaceId}`
-- `GET /api/documents/v1/workspaces/{workspaceId}/documents`
-- `POST /api/documents/v1/workspaces/{workspaceId}/documents`
-- `GET /api/documents/v1/documents/{documentId}`
-- `PATCH /api/documents/v1/documents/{documentId}`
-- `DELETE /api/documents/v1/documents/{documentId}`
-- `POST /api/documents/v1/documents/{documentId}/move`
-- `POST /api/documents/v1/documents/{documentId}/restore`
-- `GET /api/documents/v1/documents/{documentId}/blocks`
-- `POST /api/documents/v1/documents/{documentId}/blocks`
-- `PATCH /api/documents/v1/blocks/{blockId}`
-- `DELETE /api/documents/v1/blocks/{blockId}`
-- `POST /api/documents/v1/blocks/{blockId}/move`
+- `POST /v1/workspaces`
+- `GET /v1/workspaces/{workspaceId}`
+- `GET /v1/workspaces/{workspaceId}/documents`
+- `GET /v1/workspaces/{workspaceId}/trash/documents`
+- `POST /v1/workspaces/{workspaceId}/documents`
+- `GET /v1/documents/{documentId}`
+- `GET /v1/documents/{documentId}/blocks`
+- `PATCH /v1/documents/{documentId}`
+- `PATCH /v1/documents/{documentId}/visibility`
+- `POST /v1/documents/{documentId}/transactions`
+- `DELETE /v1/documents/{documentId}`
+- `PATCH /v1/documents/{documentId}/trash`
+- `POST /v1/documents/{documentId}/restore`
+- `POST /v1/documents/{documentId}/move`
+- `POST /v1/admin/documents/{documentId}/blocks`
+- `PATCH /v1/admin/blocks/{blockId}`
+- `DELETE /v1/admin/blocks/{blockId}`
+- `POST /v1/admin/blocks/{blockId}/move`
 
 Gateway가 실제로 downstream 에 전달할 때는 모두 `/v1/**` 경로로 rewrite 됩니다.
 
 예:
 
-- `GET /api/documents/v1/workspaces/{workspaceId}` -> `GET /v1/workspaces/{workspaceId}`
-- `GET /api/documents/v1/workspaces/{workspaceId}/documents` -> `GET /v1/workspaces/{workspaceId}/documents`
-- `POST /api/documents/v1/workspaces/{workspaceId}/documents` -> `POST /v1/workspaces/{workspaceId}/documents`
-- `GET /api/documents/v1/documents/{documentId}` -> `GET /v1/documents/{documentId}`
-- `PATCH /api/documents/v1/documents/{documentId}` -> `PATCH /v1/documents/{documentId}`
-- `DELETE /api/documents/v1/documents/{documentId}` -> `DELETE /v1/documents/{documentId}`
-- `POST /api/documents/v1/documents/{documentId}/restore` -> `POST /v1/documents/{documentId}/restore`
-- `GET /api/documents/v1/documents/{documentId}/blocks` -> `GET /v1/documents/{documentId}/blocks`
-- `PATCH /api/documents/v1/blocks/{blockId}` -> `PATCH /v1/blocks/{blockId}`
-- `DELETE /api/documents/v1/blocks/{blockId}` -> `DELETE /v1/blocks/{blockId}`
+- `GET /v1/workspaces/{workspaceId}` -> `GET /v1/workspaces/{workspaceId}`
+- `GET /v1/workspaces/{workspaceId}/documents` -> `GET /v1/workspaces/{workspaceId}/documents`
+- `POST /v1/workspaces/{workspaceId}/documents` -> `POST /v1/workspaces/{workspaceId}/documents`
+- `GET /v1/documents/{documentId}` -> `GET /v1/documents/{documentId}`
+- `PATCH /v1/documents/{documentId}` -> `PATCH /v1/documents/{documentId}`
+- `DELETE /v1/documents/{documentId}` -> `DELETE /v1/documents/{documentId}`
+- `POST /v1/documents/{documentId}/restore` -> `POST /v1/documents/{documentId}/restore`
+- `GET /v1/documents/{documentId}/blocks` -> `GET /v1/documents/{documentId}/blocks`
+- `PATCH /v1/admin/blocks/{blockId}` -> `PATCH /v1/admin/blocks/{blockId}`
+- `DELETE /v1/admin/blocks/{blockId}` -> `DELETE /v1/admin/blocks/{blockId}`
 
 ### 응답 계약
 

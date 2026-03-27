@@ -19,49 +19,50 @@
 
 ### Auth
 
-- `POST /auth/login`
-- `POST /auth/refresh`
-- `GET /auth/sso/start`
-- `POST /auth/exchange`
-- `GET /auth/me`
-- `POST /auth/logout`
+- `POST /v1/auth/login`
+- `POST /v1/auth/refresh`
+- `GET /v1/auth/sso/start`
+- `POST /v1/auth/exchange`
+- `GET /v1/auth/me`
+- `POST /v1/auth/logout`
 
 ### User
 
-- `POST /api/users/signup`
-- `GET /api/users/me`
+- `POST /v1/users/signup`
+- `GET /v1/users/me`
 
 ### Documents
 
-- `/api/documents/v1/**`
+- `/v1/workspaces/**`
+- `/v1/documents/**`
 
 ## 하지 말아야 할 것
 
 - `auth-service`, `user-service`, `documents-service` 내부 주소를 직접 호출하지 않습니다.
 - 클라이언트에서 `X-User-Id`를 직접 보내지 않습니다.
-- `/auth/**` 응답을 프론트에서 임의 포맷으로 가정하지 않습니다.
+- `/v1/auth/**` 응답을 프론트에서 임의 포맷으로 가정하지 않습니다.
 - OAuth callback 경로를 gateway 또는 프론트에서 임의 변경하지 않습니다.
 
 ## SSO 로그인 흐름
 
 프론트가 따라야 하는 순서는 아래와 같습니다.
 
-1. `GET /auth/sso/start?page=...` 또는 `GET /auth/sso/start?redirect_uri=...` 호출
+1. `GET /v1/auth/sso/start?page=...` 또는 `GET /v1/auth/sso/start?redirect_uri=...` 호출
 2. 브라우저가 `302 Location` 을 따라 GitHub 인증으로 이동
 3. 인증 완료 후 프론트 callback URI로 `ticket` 쿼리 파라미터 수신
-4. 프론트가 `POST /auth/exchange` 로 `ticket` 전달
+4. 프론트가 `POST /v1/auth/exchange` 로 `ticket` 전달
 5. 성공 시 `204 No Content` 와 함께 `sso_session` 쿠키 저장
-6. 이후 `GET /auth/me` 로 로그인 상태 확인
+6. 이후 `GET /v1/auth/me` 로 로그인 상태 확인
 
 ## 프론트 구현 요청사항
 
 ### 1. SSO 시작은 브라우저 이동 기준으로 처리
 
-`GET /auth/sso/start` 는 일반 JSON API처럼 처리하지 말고, 브라우저 redirect 흐름으로 다뤄야 합니다.
+`GET /v1/auth/sso/start` 는 일반 JSON API처럼 처리하지 말고, 브라우저 redirect 흐름으로 다뤄야 합니다.
 
 권장 방식:
 
-- `window.location.href = "/auth/sso/start?page=editor"`
+- `window.location.href = "/v1/auth/sso/start?page=editor"`
 - 또는 동일한 브라우저 네비게이션 방식
 
 ### 2. Callback URI는 등록값과 정확히 일치
@@ -75,9 +76,9 @@
 
 하나라도 다르면 `INVALID_REQUEST` 가 발생할 수 있습니다.
 
-### 3. `/auth/exchange` 는 `204` 를 정상 처리
+### 3. `/v1/auth/exchange` 는 `204` 를 정상 처리
 
-`POST /auth/exchange` 성공 시 응답 body가 없을 수 있습니다.
+`POST /v1/auth/exchange` 성공 시 응답 body가 없을 수 있습니다.
 
 프론트는 아래를 정상 흐름으로 처리해야 합니다.
 
@@ -90,17 +91,17 @@
 
 아래 요청은 쿠키가 필요할 수 있습니다.
 
-- `POST /auth/exchange`
-- `GET /auth/me`
-- `POST /auth/logout`
-- 필요 시 `POST /auth/refresh`
+- `POST /v1/auth/exchange`
+- `GET /v1/auth/me`
+- `POST /v1/auth/logout`
+- 필요 시 `POST /v1/auth/refresh`
 
 따라서 브라우저 호출은 반드시 credentials 포함 기준으로 맞춰주세요.
 
 예시:
 
 ```ts
-fetch("/auth/me", {
+fetch("/v1/auth/me", {
   method: "GET",
   credentials: "include",
 });
@@ -112,8 +113,8 @@ axios 사용 시에도 같은 기준으로 맞춰주세요.
 
 프론트의 로그인 상태 확인은 아래 기준으로 처리해주세요.
 
-- SSO 세션 기반 상태 확인: `GET /auth/me`
-- 사용자 도메인 정보 확인: 필요 시 `GET /api/users/me`
+- SSO 세션 기반 상태 확인: `GET /v1/auth/me`
+- 사용자 도메인 정보 확인: 필요 시 `GET /v1/users/me`
 
 즉 인증 상태와 사용자 도메인 상세는 분리해서 보는 편이 안전합니다.
 
@@ -157,11 +158,11 @@ axios 사용 시에도 같은 기준으로 맞춰주세요.
 
 1. SSO 시작을 브라우저 redirect 방식으로 처리하는지
 2. callback URI가 auth-service 등록값과 정확히 일치하는지
-3. `POST /auth/exchange` 의 `204` 응답을 정상 성공으로 처리하는지
-4. `/auth/me` 호출에 `credentials: include` 가 적용되는지
+3. `POST /v1/auth/exchange` 의 `204` 응답을 정상 성공으로 처리하는지
+4. `/v1/auth/me` 호출에 `credentials: include` 가 적용되는지
 5. 클라이언트에서 `X-User-Id` 같은 사용자 식별 헤더를 직접 만들지 않는지
 
 ## 한 줄 요약
 
-프론트는 gateway 경로만 호출하고, SSO는 `/auth/sso/start -> callback(ticket) -> /auth/exchange -> /auth/me` 흐름으로 처리해야 합니다.
+프론트는 gateway 경로만 호출하고, SSO는 `/v1/auth/sso/start -> callback(ticket) -> /v1/auth/exchange -> /v1/auth/me` 흐름으로 처리해야 합니다.
 쿠키가 필요한 요청은 반드시 `credentials: include` 를 사용하고, 클라이언트가 사용자 식별 헤더를 직접 만들면 안 됩니다.

@@ -4,6 +4,6 @@ package com.gateway.contract.external.path;
 public final class HealthApiPaths {
     private HealthApiPaths() {}
 
-    public static final String READY = "v1/ready";
-    public static final String HEALTH = "v1/health";
+    public static final String READY = "/v1/ready";
+    public static final String HEALTH = "/v1/health";
 }

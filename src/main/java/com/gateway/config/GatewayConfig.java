@@ -57,6 +57,10 @@ public final class GatewayConfig {
     private final int sessionLocalCacheTtlSeconds;
     private final int sessionCacheTtlSeconds;
     private final String sessionCacheKeyPrefix;
+    private final String internalJwtSharedSecret;
+    private final String internalJwtIssuer;
+    private final String internalJwtAudience;
+    private final int internalJwtTtlSeconds;
 
     private GatewayConfig(
             InetSocketAddress bindAddress,
@@ -89,6 +93,10 @@ public final class GatewayConfig {
             int sessionLocalCacheTtlSeconds,
             int sessionCacheTtlSeconds,
             String sessionCacheKeyPrefix,
+            String internalJwtSharedSecret,
+            String internalJwtIssuer,
+            String internalJwtAudience,
+            int internalJwtTtlSeconds,
             List<RouteDefinition> routes,
             boolean authJwtVerifyEnabled,
             String authJwtPublicKeyPem,
@@ -129,6 +137,10 @@ public final class GatewayConfig {
         this.sessionLocalCacheTtlSeconds = sessionLocalCacheTtlSeconds;
         this.sessionCacheTtlSeconds = sessionCacheTtlSeconds;
         this.sessionCacheKeyPrefix = sessionCacheKeyPrefix;
+        this.internalJwtSharedSecret = internalJwtSharedSecret;
+        this.internalJwtIssuer = internalJwtIssuer;
+        this.internalJwtAudience = internalJwtAudience;
+        this.internalJwtTtlSeconds = internalJwtTtlSeconds;
         this.routes = routes;
         this.authJwtVerifyEnabled = authJwtVerifyEnabled;
         this.authJwtPublicKeyPem = authJwtPublicKeyPem;
@@ -182,6 +194,17 @@ public final class GatewayConfig {
         String authJwtIssuer = env.get("AUTH_JWT_ISSUER");
         String authJwtAudience = env.get("AUTH_JWT_AUDIENCE");
         int authJwtClockSkewSeconds = parseInt(env.get("AUTH_JWT_CLOCK_SKEW_SECONDS"), 30, "AUTH_JWT_CLOCK_SKEW_SECONDS");
+
+        String internalJwtSharedSecret = nullIfBlank(env.get("GATEWAY_INTERNAL_JWT_SHARED_SECRET"));
+        if (internalJwtSharedSecret == null) {
+            internalJwtSharedSecret = authJwtSharedSecret;
+        }
+        if (internalJwtSharedSecret == null) {
+            internalJwtSharedSecret = "dev-internal-jwt-secret";
+        }
+        String internalJwtIssuer = env.getOrDefault("GATEWAY_INTERNAL_JWT_ISSUER", "api-gateway");
+        String internalJwtAudience = env.getOrDefault("GATEWAY_INTERNAL_JWT_AUDIENCE", "internal-services");
+        int internalJwtTtlSeconds = parseInt(env.get("GATEWAY_INTERNAL_JWT_TTL_SECONDS"), 300, "GATEWAY_INTERNAL_JWT_TTL_SECONDS");
 
         URI authServiceUri = requiredUri(env.get("AUTH_SERVICE_URL"), "AUTH_SERVICE_URL");
         URI userServiceUri = requiredUri(env.get("USER_SERVICE_URL"), "USER_SERVICE_URL");
@@ -241,6 +264,10 @@ public final class GatewayConfig {
                 sessionLocalCacheTtlSeconds,
                 sessionCacheTtlSeconds,
                 sessionCacheKeyPrefix,
+                internalJwtSharedSecret,
+                internalJwtIssuer,
+                internalJwtAudience,
+                internalJwtTtlSeconds,
                 routes,
                 authJwtVerifyEnabled,
                 authJwtPublicKeyPem,
@@ -453,6 +480,22 @@ public final class GatewayConfig {
 
     public String sessionCacheKeyPrefix() {
         return sessionCacheKeyPrefix;
+    }
+
+    public String internalJwtSharedSecret() {
+        return internalJwtSharedSecret;
+    }
+
+    public String internalJwtIssuer() {
+        return internalJwtIssuer;
+    }
+
+    public String internalJwtAudience() {
+        return internalJwtAudience;
+    }
+
+    public int internalJwtTtlSeconds() {
+        return internalJwtTtlSeconds;
     }
 
     public boolean authJwtVerifyEnabled() {

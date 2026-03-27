@@ -22,7 +22,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GatewayHandlerAuthIntegrationTest {
     private HttpServer authServer;
@@ -39,65 +42,77 @@ class GatewayHandlerAuthIntegrationTest {
     }
 
     @Test
-    void usersMeWithoutTokenReturnsUnauthorized() throws Exception {
+    void documentsWithoutBearerAndCookieReturnsUnauthorized() throws Exception {
         AtomicInteger validateCalls = new AtomicInteger();
-        AtomicInteger userCalls = new AtomicInteger();
-        startUpstreams(validateCalls, null, userCalls, null);
+        AtomicInteger blockCalls = new AtomicInteger();
+        startUpstreams(validateCalls, "user-123", blockCalls, null, null);
         startGateway();
 
-        HttpResponse<String> response = sendGatewayRequest("/api/users/me", null);
+        HttpResponse<String> response = sendGatewayRequest("/v1/documents/doc-1", null, null);
 
         assertEquals(401, response.statusCode());
         assertEquals(0, validateCalls.get());
-        assertEquals(0, userCalls.get());
+        assertEquals(0, blockCalls.get());
     }
 
     @Test
-    void usersMeWithInvalidTokenReturnsUnauthorized() throws Exception {
+    void documentsWithBearerValidatesAndForwardsInternalJwt() throws Exception {
         AtomicInteger validateCalls = new AtomicInteger();
-        AtomicInteger userCalls = new AtomicInteger();
-        startUpstreams(validateCalls, null, userCalls, null);
-        startGateway();
-
-        HttpResponse<String> response = sendGatewayRequest("/api/users/me", "Bearer not-a-jwt");
-
-        assertEquals(401, response.statusCode());
-        assertEquals(0, validateCalls.get());
-        assertEquals(0, userCalls.get());
-    }
-
-    @Test
-    void usersMeWithValidTokenValidatesWithAuthAndForwardsAuthorizationHeader() throws Exception {
-        AtomicInteger validateCalls = new AtomicInteger();
-        AtomicInteger userCalls = new AtomicInteger();
-        AtomicReference<String> authHeaderSeenByUser = new AtomicReference<>();
-        AtomicReference<String> userIdHeaderSeenByUser = new AtomicReference<>();
-        startUpstreams(validateCalls, "user-123", userCalls, exchange -> {
-            authHeaderSeenByUser.set(exchange.getRequestHeaders().getFirst("Authorization"));
-            userIdHeaderSeenByUser.set(exchange.getRequestHeaders().getFirst("X-User-Id"));
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicReference<String> authHeaderSeenByBlock = new AtomicReference<>();
+        AtomicReference<String> userIdHeaderSeenByBlock = new AtomicReference<>();
+        startUpstreams(validateCalls, "user-123", blockCalls, exchange -> {
+            authHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            userIdHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("X-User-Id"));
             writeJson(exchange, 200, "{\"ok\":true}");
-        });
+        }, null);
         startGateway();
 
-        String validShapeToken = "Bearer " + jwt("{\"sub\":\"user-123\"}");
-        HttpResponse<String> response = sendGatewayRequest("/api/users/me", validShapeToken);
+        String validShapeToken = "Bearer " + jwt("{\"sub\":\"user-123\",\"exp\":4102444800}");
+        HttpResponse<String> response = sendGatewayRequest("/v1/documents/doc-1", validShapeToken, null);
 
         assertEquals(200, response.statusCode());
-        assertEquals(1, validateCalls.get());
-        assertEquals(1, userCalls.get());
-        assertEquals(validShapeToken, authHeaderSeenByUser.get());
-        assertEquals("user-123", userIdHeaderSeenByUser.get());
+        assertEquals(0, validateCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertNotNull(authHeaderSeenByBlock.get());
+        assertTrue(authHeaderSeenByBlock.get().startsWith("Bearer "));
+        assertNotEquals(validShapeToken, authHeaderSeenByBlock.get());
+        assertEquals("user-123", userIdHeaderSeenByBlock.get());
+    }
+
+    @Test
+    void documentsWithAccessTokenCookieValidatesAndForwardsInternalJwt() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicReference<String> authHeaderSeenByBlock = new AtomicReference<>();
+        startUpstreams(validateCalls, "user-456", blockCalls, exchange -> {
+            authHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, null);
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayRequest("/v1/documents/doc-2", null, "ACCESS_TOKEN=" + jwt("{\"sub\":\"user-456\",\"exp\":4102444800}") + "; Path=/; HttpOnly");
+
+        assertEquals(200, response.statusCode());
+        assertEquals(0, validateCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertNotNull(authHeaderSeenByBlock.get());
+        assertTrue(authHeaderSeenByBlock.get().startsWith("Bearer "));
     }
 
     private void startUpstreams(
             AtomicInteger validateCalls,
             String validatedUserId,
-            AtomicInteger userCalls,
-            HttpHandler usersHandler
+            AtomicInteger blockCalls,
+            HttpHandler blockHandler,
+            HttpHandler authValidateHandler
     ) throws IOException {
         authServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         authServer.createContext("/auth/internal/session/validate", exchange -> {
             validateCalls.incrementAndGet();
+            if (authValidateHandler != null) {
+                authValidateHandler.handle(exchange);
+            }
             if (validatedUserId == null) {
                 writeJson(exchange, 401, "{\"authenticated\":false}");
                 return;
@@ -107,18 +122,18 @@ class GatewayHandlerAuthIntegrationTest {
         authServer.start();
 
         userServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        userServer.createContext("/api/users/me", exchange -> {
-            userCalls.incrementAndGet();
-            if (usersHandler != null) {
-                usersHandler.handle(exchange);
+        userServer.createContext("/", exchange -> writeJson(exchange, 200, "{\"ok\":true}"));
+        userServer.start();
+
+        blockServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        blockServer.createContext("/documents", exchange -> {
+            blockCalls.incrementAndGet();
+            if (blockHandler != null) {
+                blockHandler.handle(exchange);
                 return;
             }
             writeJson(exchange, 200, "{\"ok\":true}");
         });
-        userServer.start();
-
-        blockServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        blockServer.createContext("/", exchange -> writeJson(exchange, 200, "{\"ok\":true}"));
         blockServer.start();
     }
 
@@ -128,6 +143,7 @@ class GatewayHandlerAuthIntegrationTest {
                 "GATEWAY_PORT", "0",
                 "GATEWAY_INTERNAL_IP_GUARD_ENABLED", "false",
                 "GATEWAY_IP_GUARD_ENABLED", "false",
+                "AUTH_JWT_VERIFY_ENABLED", "false",
                 "AUTH_SERVICE_URL", "http://127.0.0.1:" + authServer.getAddress().getPort(),
                 "USER_SERVICE_URL", "http://127.0.0.1:" + userServer.getAddress().getPort(),
                 "BLOCK_SERVICE_URL", "http://127.0.0.1:" + blockServer.getAddress().getPort()
@@ -138,7 +154,7 @@ class GatewayHandlerAuthIntegrationTest {
         gatewayServer.start();
     }
 
-    private HttpResponse<String> sendGatewayRequest(String path, String authorizationHeader) throws Exception {
+    private HttpResponse<String> sendGatewayRequest(String path, String authorizationHeader, String cookieHeader) throws Exception {
         assertNotNull(gatewayServer);
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:" + gatewayServer.getAddress().getPort() + path))
@@ -146,6 +162,9 @@ class GatewayHandlerAuthIntegrationTest {
                 .GET();
         if (authorizationHeader != null) {
             requestBuilder.header("Authorization", authorizationHeader);
+        }
+        if (cookieHeader != null) {
+            requestBuilder.header("Cookie", cookieHeader);
         }
         return HttpClient.newHttpClient().send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
     }

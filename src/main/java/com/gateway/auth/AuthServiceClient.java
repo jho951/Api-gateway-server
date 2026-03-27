@@ -93,6 +93,7 @@ public final class AuthServiceClient {
     public AuthResult validateSession(
             URI authServiceBaseUri,
             String authorizationHeader,
+            String cookieHeader,
             String requestId,
             String correlationId
     ) throws IOException, InterruptedException {
@@ -100,13 +101,18 @@ public final class AuthServiceClient {
         URI targetUri = authServiceBaseUri.resolve(ServicePaths.Auth.SESSION_VALIDATE);
 
         // 요청 구성
-        HttpRequest request = HttpRequest.newBuilder(targetUri)
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(targetUri)
                 .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.noBody()) // 본문 없이 POST 요청
-                .header("Authorization", authorizationHeader)
                 .header(TraceHeaders.REQUEST_ID, requestId)
-                .header(TraceHeaders.CORRELATION_ID, correlationId)
-                .build();
+                .header(TraceHeaders.CORRELATION_ID, correlationId);
+        if (authorizationHeader != null && !authorizationHeader.isBlank()) {
+            requestBuilder.header("Authorization", authorizationHeader);
+        }
+        if (cookieHeader != null && !cookieHeader.isBlank()) {
+            requestBuilder.header("Cookie", cookieHeader);
+        }
+        HttpRequest request = requestBuilder.build();
 
         // 요청 전송 및 응답 수신
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());

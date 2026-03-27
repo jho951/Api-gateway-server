@@ -65,7 +65,7 @@ public final class AuthSessionValidator {
             return AuthVerificationResult.failed(verificationResult);
         }
 
-        AuthResult authResult = authServiceClient.validateSession(authServiceUri, authorizationHeader, requestId, correlationId);
+        AuthResult authResult = authServiceClient.validateSession(authServiceUri, authorizationHeader, null, requestId, correlationId);
         if (!authResult.isAuthenticated()) {
             return AuthVerificationResult.failed(verificationResult);
         }
@@ -80,6 +80,17 @@ public final class AuthSessionValidator {
         }
 
         return AuthVerificationResult.fromService(verificationResult, authResult);
+    }
+
+    public AuthVerificationResult verifyBySessionCookie(String cookieHeader, String requestId, String correlationId) throws IOException, InterruptedException {
+        if (cookieHeader == null || cookieHeader.isBlank() || !cookieHeader.contains("sso_session=")) {
+            return AuthVerificationResult.failed(AuthTokenVerifier.Result.rejected("MISSING_SSO_SESSION_COOKIE"));
+        }
+        AuthResult authResult = authServiceClient.validateSession(authServiceUri, null, cookieHeader, requestId, correlationId);
+        if (!authResult.isAuthenticated()) {
+            return AuthVerificationResult.failed(AuthTokenVerifier.Result.rejected("COOKIE_SESSION_UNAUTHORIZED"));
+        }
+        return AuthVerificationResult.fromService(AuthTokenVerifier.Result.skipped("COOKIE_SESSION_VALIDATED"), authResult);
     }
 
     private static String extractToken(String authorizationHeader) {

@@ -10,9 +10,7 @@ import java.net.URI;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * JWT + 세션 검증을 위한 L1/L2 캐시를 관리하고 Auth Service로 fall back 하는 클래스입니다.
- */
+/** JWT + 세션 검증을 위한 L1/L2 캐시를 관리하고 Auth Service로 fall back 하는 클래스입니다. */
 public final class AuthSessionValidator {
     private static final Logger log = Logger.getLogger(AuthSessionValidator.class.getName());
 

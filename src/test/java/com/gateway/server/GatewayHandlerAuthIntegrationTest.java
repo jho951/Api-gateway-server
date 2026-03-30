@@ -100,6 +100,37 @@ class GatewayHandlerAuthIntegrationTest {
         assertTrue(authHeaderSeenByBlock.get().startsWith("Bearer "));
     }
 
+    @Test
+    void internalPathWithoutInternalSecretReturnsForbidden() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        startUpstreams(validateCalls, "user-123", blockCalls, null, null);
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayRequest("/v1/internal/ping", null, null);
+
+        assertEquals(403, response.statusCode());
+    }
+
+    @Test
+    void internalPathWithInternalSecretForwards() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        startUpstreams(validateCalls, "user-123", blockCalls, null, null);
+        startGateway();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + gatewayServer.getAddress().getPort() + "/v1/internal/ping"))
+                .timeout(Duration.ofSeconds(3))
+                .header("X-Internal-Request-Secret", "dev-internal-jwt-secret")
+                .GET()
+                .build();
+
+        HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+    }
+
     private void startUpstreams(
             AtomicInteger validateCalls,
             String validatedUserId,
@@ -119,6 +150,7 @@ class GatewayHandlerAuthIntegrationTest {
             }
             writeJson(exchange, 200, "{\"authenticated\":true,\"userId\":\"" + validatedUserId + "\"}");
         });
+        authServer.createContext("/internal/ping", exchange -> writeJson(exchange, 200, "{\"ok\":true}"));
         authServer.start();
 
         userServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

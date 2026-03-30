@@ -11,9 +11,10 @@ import java.util.concurrent.Executors;
 
 /**
  * JDK 내장 HTTP 서버를 이용해 게이트웨이 런타임을 구동합니다.
- *
- * <p>모든 요청은 루트 컨텍스트 하나로 수신되고, 실제 정책 집행은
- * {@link GatewayHandler} 가 담당합니다.</p>
+ * <p>
+ * 모든 요청은 루트 컨텍스트 하나로 수신되고,
+ * 실제 정책 집행은 {@link GatewayHandler} 가 담당합니다.
+ * </p>
  */
 public final class GatewayServer {
     private static final Logger log = Logger.getLogger(GatewayServer.class.getName());

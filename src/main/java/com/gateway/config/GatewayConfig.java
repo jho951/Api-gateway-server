@@ -57,10 +57,18 @@ public final class GatewayConfig {
     private final int sessionLocalCacheTtlSeconds;
     private final int sessionCacheTtlSeconds;
     private final String sessionCacheKeyPrefix;
+    private final boolean oauthDebugLogEnabled;
+    private final boolean auditLogEnabled;
+    private final String auditLogPath;
+    private final String auditLogServiceName;
+    private final String auditLogEnv;
+    private final boolean auditLogAsyncEnabled;
+    private final int auditLogAsyncThreads;
     private final String internalJwtSharedSecret;
     private final String internalJwtIssuer;
     private final String internalJwtAudience;
     private final int internalJwtTtlSeconds;
+    private final String internalRequestSecret;
 
     private GatewayConfig(
             InetSocketAddress bindAddress,
@@ -93,10 +101,18 @@ public final class GatewayConfig {
             int sessionLocalCacheTtlSeconds,
             int sessionCacheTtlSeconds,
             String sessionCacheKeyPrefix,
+            boolean oauthDebugLogEnabled,
+            boolean auditLogEnabled,
+            String auditLogPath,
+            String auditLogServiceName,
+            String auditLogEnv,
+            boolean auditLogAsyncEnabled,
+            int auditLogAsyncThreads,
             String internalJwtSharedSecret,
             String internalJwtIssuer,
             String internalJwtAudience,
             int internalJwtTtlSeconds,
+            String internalRequestSecret,
             List<RouteDefinition> routes,
             boolean authJwtVerifyEnabled,
             String authJwtPublicKeyPem,
@@ -137,10 +153,18 @@ public final class GatewayConfig {
         this.sessionLocalCacheTtlSeconds = sessionLocalCacheTtlSeconds;
         this.sessionCacheTtlSeconds = sessionCacheTtlSeconds;
         this.sessionCacheKeyPrefix = sessionCacheKeyPrefix;
+        this.oauthDebugLogEnabled = oauthDebugLogEnabled;
+        this.auditLogEnabled = auditLogEnabled;
+        this.auditLogPath = auditLogPath;
+        this.auditLogServiceName = auditLogServiceName;
+        this.auditLogEnv = auditLogEnv;
+        this.auditLogAsyncEnabled = auditLogAsyncEnabled;
+        this.auditLogAsyncThreads = auditLogAsyncThreads;
         this.internalJwtSharedSecret = internalJwtSharedSecret;
         this.internalJwtIssuer = internalJwtIssuer;
         this.internalJwtAudience = internalJwtAudience;
         this.internalJwtTtlSeconds = internalJwtTtlSeconds;
+        this.internalRequestSecret = internalRequestSecret;
         this.routes = routes;
         this.authJwtVerifyEnabled = authJwtVerifyEnabled;
         this.authJwtPublicKeyPem = authJwtPublicKeyPem;
@@ -181,6 +205,13 @@ public final class GatewayConfig {
         int sessionLocalCacheTtlSeconds = parseInt(env.get("GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS"), 3, "GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS");
         int sessionCacheTtlSeconds = parseInt(env.get("GATEWAY_SESSION_CACHE_TTL_SECONDS"), 60, "GATEWAY_SESSION_CACHE_TTL_SECONDS");
         String sessionCacheKeyPrefix = env.getOrDefault("GATEWAY_SESSION_CACHE_KEY_PREFIX", "gateway:session:");
+        boolean oauthDebugLogEnabled = parseBoolean(env.get("GATEWAY_OAUTH_DEBUG_LOG_ENABLED"), false);
+        boolean auditLogEnabled = parseBoolean(env.get("GATEWAY_AUDIT_LOG_ENABLED"), true);
+        String auditLogPath = env.getOrDefault("GATEWAY_AUDIT_LOG_PATH", "./logs/audit.log");
+        String auditLogServiceName = env.getOrDefault("GATEWAY_AUDIT_SERVICE_NAME", "api-gateway-server");
+        String auditLogEnv = env.getOrDefault("APP_ENV", "local");
+        boolean auditLogAsyncEnabled = parseBoolean(env.get("GATEWAY_AUDIT_LOG_ASYNC_ENABLED"), true);
+        int auditLogAsyncThreads = parseInt(env.get("GATEWAY_AUDIT_LOG_ASYNC_THREADS"), 2, "GATEWAY_AUDIT_LOG_ASYNC_THREADS");
 
         boolean rawAuthJwtVerifyEnabled = parseBoolean(env.get("AUTH_JWT_VERIFY_ENABLED"), false);
         String authJwtPublicKeyPem = nullIfBlank(env.get("AUTH_JWT_PUBLIC_KEY_PEM"));
@@ -205,6 +236,10 @@ public final class GatewayConfig {
         String internalJwtIssuer = env.getOrDefault("GATEWAY_INTERNAL_JWT_ISSUER", "api-gateway");
         String internalJwtAudience = env.getOrDefault("GATEWAY_INTERNAL_JWT_AUDIENCE", "internal-services");
         int internalJwtTtlSeconds = parseInt(env.get("GATEWAY_INTERNAL_JWT_TTL_SECONDS"), 300, "GATEWAY_INTERNAL_JWT_TTL_SECONDS");
+        String internalRequestSecret = nullIfBlank(env.get("GATEWAY_INTERNAL_REQUEST_SECRET"));
+        if (internalRequestSecret == null) {
+            internalRequestSecret = internalJwtSharedSecret;
+        }
 
         URI authServiceUri = requiredUri(env.get("AUTH_SERVICE_URL"), "AUTH_SERVICE_URL");
         URI userServiceUri = requiredUri(env.get("USER_SERVICE_URL"), "USER_SERVICE_URL");
@@ -264,10 +299,18 @@ public final class GatewayConfig {
                 sessionLocalCacheTtlSeconds,
                 sessionCacheTtlSeconds,
                 sessionCacheKeyPrefix,
+                oauthDebugLogEnabled,
+                auditLogEnabled,
+                auditLogPath,
+                auditLogServiceName,
+                auditLogEnv,
+                auditLogAsyncEnabled,
+                auditLogAsyncThreads,
                 internalJwtSharedSecret,
                 internalJwtIssuer,
                 internalJwtAudience,
                 internalJwtTtlSeconds,
+                internalRequestSecret,
                 routes,
                 authJwtVerifyEnabled,
                 authJwtPublicKeyPem,
@@ -307,6 +350,7 @@ public final class GatewayConfig {
 
         routes.add(new RouteDefinition(UserApiPaths.SIGNUP, RouteType.PUBLIC, "user", userServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(UserApiPaths.ME, RouteType.PUBLIC, "user", userServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(UserApiPaths.INTERNAL_FIND_OR_CREATE_AND_LINK_SOCIAL, RouteType.INTERNAL, "user", userServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(UserApiPaths.INTERNAL_USERS_ALL, RouteType.INTERNAL, "user", userServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(DocumentApiPaths.WORKSPACES_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(DocumentApiPaths.DOCUMENTS_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
@@ -482,6 +526,34 @@ public final class GatewayConfig {
         return sessionCacheKeyPrefix;
     }
 
+    public boolean oauthDebugLogEnabled() {
+        return oauthDebugLogEnabled;
+    }
+
+    public boolean auditLogEnabled() {
+        return auditLogEnabled;
+    }
+
+    public String auditLogPath() {
+        return auditLogPath;
+    }
+
+    public String auditLogServiceName() {
+        return auditLogServiceName;
+    }
+
+    public String auditLogEnv() {
+        return auditLogEnv;
+    }
+
+    public boolean auditLogAsyncEnabled() {
+        return auditLogAsyncEnabled;
+    }
+
+    public int auditLogAsyncThreads() {
+        return auditLogAsyncThreads;
+    }
+
     public String internalJwtSharedSecret() {
         return internalJwtSharedSecret;
     }
@@ -496,6 +568,10 @@ public final class GatewayConfig {
 
     public int internalJwtTtlSeconds() {
         return internalJwtTtlSeconds;
+    }
+
+    public String internalRequestSecret() {
+        return internalRequestSecret;
     }
 
     public boolean authJwtVerifyEnabled() {

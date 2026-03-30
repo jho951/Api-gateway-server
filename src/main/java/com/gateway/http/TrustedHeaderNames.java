@@ -14,6 +14,7 @@ public final class TrustedHeaderNames {
             ServiceHeaders.Trusted.USER_ID.toLowerCase(),
             ServiceHeaders.Trusted.USER_ROLE.toLowerCase(),
             ServiceHeaders.Trusted.SESSION_ID.toLowerCase(),
+            ServiceHeaders.Auth.INTERNAL_REQUEST_SECRET.toLowerCase(),
             TraceHeaders.REQUEST_ID.toLowerCase(),
             TraceHeaders.CORRELATION_ID.toLowerCase(),
             "x-auth-user-id",

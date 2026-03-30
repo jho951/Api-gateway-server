@@ -17,6 +17,15 @@ public final class RedisPermissionCache {
     private final int ttlSeconds;
     private final String keyPrefix;
 
+    /**
+     * 생성자
+     * @param enabled
+     * @param host
+     * @param port
+     * @param timeoutMs
+     * @param ttlSeconds
+     * @param keyPrefix
+     */
     public RedisPermissionCache(boolean enabled, String host, int port, int timeoutMs, int ttlSeconds, String keyPrefix) {
         this.enabled = enabled;
         this.host = host;
@@ -27,14 +36,10 @@ public final class RedisPermissionCache {
     }
 
     public Boolean get(String cacheKey) {
-        if (!enabled) {
-            return null;
-        }
+        if (!enabled) return null;
         try (RedisConnection connection = new RedisConnection(host, port, timeoutMs)) {
             String value = connection.get(keyPrefix + cacheKey);
-            if (value == null) {
-                return null;
-            }
+            if (value == null) return null;
             return "ALLOW".equalsIgnoreCase(value);
         } catch (IOException ex) {
             return null;
@@ -42,12 +47,11 @@ public final class RedisPermissionCache {
     }
 
     public void put(String cacheKey, boolean allowed) {
-        if (!enabled) {
-            return;
-        }
+        if (!enabled) return;
         try (RedisConnection connection = new RedisConnection(host, port, timeoutMs)) {
             connection.setEx(keyPrefix + cacheKey, ttlSeconds, allowed ? "ALLOW" : "DENY");
         } catch (IOException ignored) {
+
         }
     }
 }

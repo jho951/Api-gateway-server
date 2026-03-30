@@ -16,6 +16,7 @@
 - 리프레시 토큰은 gateway가 저장하거나 Redis에 접근하지 않고, `/v1/auth/refresh` 요청은 그대로 auth-service로 프록시되어 갱신/저장을 auth-service만 수행합니다.
 - credentials 기반 브라우저 호출을 위해 CORS는 명시 origin + `Access-Control-Allow-Credentials: true` 기준으로 동작합니다.
 - `user-service` 공개 API는 `/v1/users/**`로, 내부 API는 `/v1/internal/users/**`로 유지합니다.
+- OAuth2 사용자 프로비저닝 단일 호출 경로 `/v1/internal/users/find-or-create-and-link-social` 도 내부 사용자 API로 동일 정책을 적용합니다.
 - `user-service` 라우트에는 `Authorization` 헤더를 그대로 전달하고, 내부 사용자 API는 허용된 내부 IP 대역에서만 통과시킵니다.
 - `internal` 경로는 사용자 기능 API가 아니라 Gateway와 내부 서비스 사이의 계약입니다.
 - `local`과 `prod` 설정은 루트의 `.env.local`, `.env.prod`로 분리되어 있습니다.
@@ -37,6 +38,7 @@
 - `AUTH_JWT_ISSUER`: `iss` 클레임이 반드시 이 값과 일치해야 인증을 성공으로 판단합니다([선택 사항]).
 - `AUTH_JWT_AUDIENCE`: `aud` 클레임에 이 값을 반드시 포함시켜야 합니다([선택 사항], 문자열 또는 배열 모두 지원).
 - `AUTH_JWT_CLOCK_SKEW_SECONDS`: `exp` 비교 시 허용할 최대 시계 차 입니다. 기본값은 `30`.
+- `GATEWAY_OAUTH_DEBUG_LOG_ENABLED`: `true`로 설정하면 `/v1/auth/sso/start`, `/v1/oauth2/**`, `/v1/login/oauth2/**`, `/v1/auth/exchange` 요청/응답에 대해 `oauth_trace` 로그를 INFO 레벨로 출력합니다(쿠키/코드 값은 출력하지 않고 존재 여부만 출력).
 
 ## Response Codes
 
@@ -161,23 +163,26 @@ bash scripts/run.docker.sh local
 
 기본 포트는 `http://localhost:8080` 입니다.
 
+`scripts/run.docker.sh` 는 공유 external 네트워크(`SHARED_SERVICE_NETWORK`, 기본값 `service-backbone-shared`)가 없으면 자동 생성합니다.
+
 ## Secure Deployment Baseline
 
 documents-service와 auth-service의 direct access를 막으려면 gateway만 외부 포트를 열고, upstream 서비스는 내부 네트워크에만 두는 구성이 필요합니다.
 
-이 저장소에는 예시 배포 파일로 [docker-compose.secure-example.yml](/Users/jhons/Downloads/BE/Api-gateway-server/docker/docker-compose.secure-example.yml) 를 추가했습니다.
+이 저장소의 단일 compose 파일([docker-compose.yml](/Users/jhons/Downloads/BE/Api-gateway-server/docker/docker-compose.yml))은 기본 gateway 실행과 `local-stack` profile 실행을 함께 지원합니다.
 
 구성 원칙:
 
 - `gateway`만 `8080:8080`으로 외부 공개
-- `auth-service`, `user-service`, `documents-service`, `permission-service`는 `ports` 없이 내부 네트워크만 연결
-- gateway는 `service-backplane` 내부 네트워크를 통해서만 upstream 서비스에 접근
-- `service-backplane` 네트워크는 `internal: true`로 외부 직접 접근 차단
+- `gateway`, `auth-service`, `user-service`, `documents-service`, `permission-service`는 공유 external 네트워크(`service-backbone-shared`)로만 서비스 간 통신
+- 각 서비스 DB는 서비스별 private internal 네트워크(`auth-private`, `user-private`, `documents-private`, `permission-private`)에만 연결
+- 서비스 컨테이너는 `service-backbone-shared` + 자기 private 네트워크에만 연결되고, DB는 private 네트워크만 연결
 
 예시 실행:
 
 ```bash
-docker compose -f docker/docker-compose.secure-example.yml up --build
+docker network create service-backbone-shared || true
+docker compose -f docker/docker-compose.yml --profile local-stack up --build
 ```
 
 이 예시를 운영 배포 기준으로 사용할 때는 이미지 이름, 내부 포트, ingress/security group, allowlist, mTLS 같은 환경별 정책을 함께 맞춰야 합니다.

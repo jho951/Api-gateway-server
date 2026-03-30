@@ -45,5 +45,8 @@ public final class ServiceHeaders {
 
         /** SSO 인증 교환에 사용하는 일회성 티켓 */
         public static final String SSO_TICKET = "X-SSO-Ticket";
+
+        /** INTERNAL 경로 호출을 허용하는 내부 전용 공유 시크릿 */
+        public static final String INTERNAL_REQUEST_SECRET = "X-Internal-Request-Secret";
     }
 }

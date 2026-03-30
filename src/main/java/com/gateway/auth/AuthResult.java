@@ -39,9 +39,7 @@ public final class AuthResult {
         return role;
     }
     public String getSessionId() {return sessionId;}
-    public boolean isAdmin() {
-        return "ADMIN".equalsIgnoreCase(role);
-    }
+    public boolean isAdmin() {return "ADMIN".equalsIgnoreCase(role);}
 
     public Map<String, List<String>> toTrustedHeaders(String requestId, String correlationId) {
         return Map.of(

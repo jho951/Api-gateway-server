@@ -16,12 +16,6 @@ import com.gateway.config.RuntimeEnvironment;
 public final class GatewayApplication {
     private GatewayApplication() {}
 
-    /**
-     * 게이트웨이 서버 시작점
-     *
-     * @param args 명령행 인자
-     * @throws Exception 설정 파싱 실패 또는 서버 시작 실패 시 발생합니다
-     */
     public static void main(String[] args) throws Exception {
         RuntimeEnvironment.ResolvedEnvironment runtimeEnvironment = RuntimeEnvironment.load(args);
         GatewayConfig config = GatewayConfig.fromEnv(runtimeEnvironment.variables());

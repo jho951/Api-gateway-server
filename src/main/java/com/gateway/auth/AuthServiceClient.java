@@ -97,13 +97,11 @@ public final class AuthServiceClient {
             String requestId,
             String correlationId
     ) throws IOException, InterruptedException {
-        // 검증 엔드포인트 경로 해석
         URI targetUri = authServiceBaseUri.resolve(ServicePaths.Auth.SESSION_VALIDATE);
 
-        // 요청 구성
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(targetUri)
                 .timeout(timeout)
-                .POST(HttpRequest.BodyPublishers.noBody()) // 본문 없이 POST 요청
+                .POST(HttpRequest.BodyPublishers.noBody())
                 .header(TraceHeaders.REQUEST_ID, requestId)
                 .header(TraceHeaders.CORRELATION_ID, correlationId);
         if (authorizationHeader != null && !authorizationHeader.isBlank()) {
@@ -113,31 +111,20 @@ public final class AuthServiceClient {
             requestBuilder.header("Cookie", cookieHeader);
         }
         HttpRequest request = requestBuilder.build();
-
-        // 요청 전송 및 응답 수신
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
         String responseBody = response.body() == null ? "" : response.body();
-
-        // 1. User ID 추출 (JSON 바디 -> 없으면 헤더 확인)
         String userId = firstJsonField(responseBody, USER_ID_FIELD);
         if (userId == null || userId.isBlank()) {
             userId = firstHeader(response, ServiceHeaders.Trusted.USER_ID);
         }
-
-        // 2. Role 추출 (JSON 바디 -> 없으면 헤더 확인)
         String role = firstJsonField(responseBody, ROLE_FIELD);
-        if (role == null || role.isBlank()) {
-            role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
-        }
-
-        // 3. Session ID 추출 (JSON 바디 -> 없으면 헤더 확인)
+        if (role == null ) role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
+        if (role.isBlank()) role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
         String sessionId = firstJsonField(responseBody, SESSION_ID_FIELD);
-        if (sessionId == null || sessionId.isBlank()) {
-            sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
-        }
+        if (sessionId == null) sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
+        if (sessionId.isBlank()) sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
 
-        // 최종 인증 여부 판별
         boolean authenticated = response.statusCode() == 200
                 && isAuthenticated(responseBody)
                 && userId != null

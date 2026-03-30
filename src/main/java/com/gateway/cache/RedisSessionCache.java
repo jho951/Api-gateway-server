@@ -4,9 +4,7 @@ import com.gateway.auth.AuthResult;
 
 import java.io.IOException;
 
-/**
- * Redis에 공통 세션 검증 결과를 저장/조회하는 L2 캐시입니다.
- */
+/** Redis에 공통 세션 검증 결과를 저장/조회하는 L2 캐시입니다. */
 public final class RedisSessionCache {
     private static final char DELIMITER = '\u0001';
 

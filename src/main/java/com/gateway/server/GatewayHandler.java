@@ -5,6 +5,7 @@ import com.gateway.contract.external.path.AuthApiPaths;
 import com.gateway.contract.external.path.HealthApiPaths;
 import com.gateway.contract.internal.header.ServiceHeaders;
 import com.gateway.audit.GatewayAuditService;
+import com.gateway.auth.AuthServiceClient;
 import com.gateway.code.GatewayErrorCode;
 import com.gateway.config.GatewayConfig;
 import com.gateway.contract.internal.header.TraceHeaders;
@@ -57,6 +58,7 @@ public final class GatewayHandler implements HttpHandler {
     private final AuthTokenVerifier tokenVerifier;
     private final JwtUserContextExtractor userContextExtractor;
     private final InternalJwtIssuer internalJwtIssuer;
+    private final AuthServiceClient authServiceClient;
     private final LocalSessionCache localSessionCache;
     private final RedisSessionCache redisSessionCache;
     private final GatewayAuditService gatewayAuditService;
@@ -90,12 +92,14 @@ public final class GatewayHandler implements HttpHandler {
                 config.internalJwtAudience(),
                 config.internalJwtTtlSeconds()
         );
+        this.authServiceClient = new AuthServiceClient(config.requestTimeout());
         int localTtl = config.sessionCacheEnabled() ? config.sessionLocalCacheTtlSeconds() : 0;
         this.localSessionCache = new LocalSessionCache(localTtl);
         this.redisSessionCache = new RedisSessionCache(
                 config.sessionCacheEnabled(),
                 config.redisHost(),
                 config.redisPort(),
+                config.redisPassword(),
                 config.redisTimeoutMs(),
                 config.sessionCacheTtlSeconds(),
                 config.sessionCacheKeyPrefix()
@@ -147,49 +151,68 @@ public final class GatewayHandler implements HttpHandler {
 
             if (requiresAuthorizationPrecheck(match.route(), requestPath)) {
                 String authForVerification = resolveIncomingAuth(exchange);
-                JwtPrecheckPolicy.Result precheckResult = jwtPrecheckPolicy.precheck(authForVerification);
-                authOutcome = precheckResult.outcome();
-                if (!precheckResult.accepted()) throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
-
-                String token = extractToken(authForVerification);
-                String cacheKey = SessionCacheKey.fromToken(token);
-                AuthResult cachedAuthResult = localSessionCache.get(cacheKey);
-                if (cachedAuthResult != null && cachedAuthResult.isAuthenticated() && hasUserId(cachedAuthResult)) {
-                    resolvedUserId = cachedAuthResult.getUserId();
-                    authOutcome = "SESSION_CACHE_L1";
-                } else {
-                    if (redisSessionCache.enabled()) {
-                        try {
-                            cachedAuthResult = redisSessionCache.get(cacheKey);
-                        } catch (IOException ex) {
-                            log.log(Level.FINE, "requestId=" + requestId + " redis_session_cache_read_failed", ex);
-                            cachedAuthResult = null;
-                        }
-                        if (cachedAuthResult != null && cachedAuthResult.isAuthenticated() && hasUserId(cachedAuthResult)) {
-                            localSessionCache.put(cacheKey, cachedAuthResult);
-                            resolvedUserId = cachedAuthResult.getUserId();
-                            authOutcome = "SESSION_CACHE_L2";
-                        }
-                    }
-                }
-
-                if (resolvedUserId == null || resolvedUserId.isBlank()) {
-                    AuthTokenVerifier.Result verificationResult = tokenVerifier.verify(authForVerification);
-                    authOutcome = verificationResult.outcome();
-                    if (!verificationResult.verified()) throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
-
-                    resolvedUserId = userContextExtractor.extractUserId(authForVerification);
-                    if (resolvedUserId == null || resolvedUserId.isBlank()) {
+                if (authForVerification == null || authForVerification.isBlank()) {
+                    String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+                    if (cookieHeader == null || cookieHeader.isBlank() || !cookieHeader.contains("sso_session=")) {
                         throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
                     }
+                    AuthResult sessionAuthResult = authServiceClient.validateSession(
+                            config.authServiceUri(),
+                            null,
+                            cookieHeader,
+                            requestId,
+                            correlationId
+                    );
+                    if (!sessionAuthResult.isAuthenticated() || !hasUserId(sessionAuthResult)) {
+                        throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
+                    }
+                    resolvedUserId = sessionAuthResult.getUserId();
+                    authOutcome = "COOKIE_SESSION_VALIDATED";
+                } else {
+                    JwtPrecheckPolicy.Result precheckResult = jwtPrecheckPolicy.precheck(authForVerification);
+                    authOutcome = precheckResult.outcome();
+                    if (!precheckResult.accepted()) throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
 
-                    AuthResult verifiedAuthResult = new AuthResult(200, true, resolvedUserId, null, null);
-                    localSessionCache.put(cacheKey, verifiedAuthResult);
-                    if (redisSessionCache.enabled()) {
-                        try {
-                            redisSessionCache.put(cacheKey, verifiedAuthResult);
-                        } catch (IOException ex) {
-                            log.log(Level.FINE, "requestId=" + requestId + " redis_session_cache_write_failed", ex);
+                    String token = extractToken(authForVerification);
+                    String cacheKey = SessionCacheKey.fromToken(token);
+                    AuthResult cachedAuthResult = localSessionCache.get(cacheKey);
+                    if (cachedAuthResult != null && cachedAuthResult.isAuthenticated() && hasUserId(cachedAuthResult)) {
+                        resolvedUserId = cachedAuthResult.getUserId();
+                        authOutcome = "SESSION_CACHE_L1";
+                    } else {
+                        if (redisSessionCache.enabled()) {
+                            try {
+                                cachedAuthResult = redisSessionCache.get(cacheKey);
+                            } catch (IOException ex) {
+                                log.log(Level.FINE, "requestId=" + requestId + " redis_session_cache_read_failed", ex);
+                                cachedAuthResult = null;
+                            }
+                            if (cachedAuthResult != null && cachedAuthResult.isAuthenticated() && hasUserId(cachedAuthResult)) {
+                                localSessionCache.put(cacheKey, cachedAuthResult);
+                                resolvedUserId = cachedAuthResult.getUserId();
+                                authOutcome = "SESSION_CACHE_L2";
+                            }
+                        }
+                    }
+
+                    if (resolvedUserId == null || resolvedUserId.isBlank()) {
+                        AuthTokenVerifier.Result verificationResult = tokenVerifier.verify(authForVerification);
+                        authOutcome = verificationResult.outcome();
+                        if (!verificationResult.verified()) throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
+
+                        resolvedUserId = userContextExtractor.extractUserId(authForVerification);
+                        if (resolvedUserId == null || resolvedUserId.isBlank()) {
+                            throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
+                        }
+
+                        AuthResult verifiedAuthResult = new AuthResult(200, true, resolvedUserId, null, null);
+                        localSessionCache.put(cacheKey, verifiedAuthResult);
+                        if (redisSessionCache.enabled()) {
+                            try {
+                                redisSessionCache.put(cacheKey, verifiedAuthResult);
+                            } catch (IOException ex) {
+                                log.log(Level.FINE, "requestId=" + requestId + " redis_session_cache_write_failed", ex);
+                            }
                         }
                     }
                 }
@@ -407,9 +430,6 @@ public final class GatewayHandler implements HttpHandler {
             return authorizationHeader;
         }
         String accessToken = extractCookieValue(exchange.getRequestHeaders().getFirst("Cookie"), "ACCESS_TOKEN");
-        if (accessToken == null || accessToken.isBlank()) {
-            accessToken = extractCookieValue(exchange.getRequestHeaders().getFirst("Cookie"), "sso_session");
-        }
         if (accessToken == null || accessToken.isBlank()) {
             return null;
         }

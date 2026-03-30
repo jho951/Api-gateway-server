@@ -11,14 +11,16 @@ public final class RedisSessionCache {
     private final boolean enabled;
     private final String host;
     private final int port;
+    private final String password;
     private final int timeoutMs;
     private final int ttlSeconds;
     private final String keyPrefix;
 
-    public RedisSessionCache(boolean enabled, String host, int port, int timeoutMs, int ttlSeconds, String keyPrefix) {
+    public RedisSessionCache(boolean enabled, String host, int port, String password, int timeoutMs, int ttlSeconds, String keyPrefix) {
         this.enabled = enabled;
         this.host = host;
         this.port = port;
+        this.password = password;
         this.timeoutMs = timeoutMs;
         this.ttlSeconds = ttlSeconds;
         this.keyPrefix = keyPrefix;
@@ -32,7 +34,7 @@ public final class RedisSessionCache {
         if (!enabled()) {
             return null;
         }
-        try (RedisConnection connection = new RedisConnection(host, port, timeoutMs)) {
+        try (RedisConnection connection = new RedisConnection(host, port, timeoutMs, password)) {
             String raw = connection.get(keyPrefix + cacheKey);
             return decode(raw);
         }
@@ -42,7 +44,7 @@ public final class RedisSessionCache {
         if (!enabled() || authResult == null || !authResult.isAuthenticated()) {
             return;
         }
-        try (RedisConnection connection = new RedisConnection(host, port, timeoutMs)) {
+        try (RedisConnection connection = new RedisConnection(host, port, timeoutMs, password)) {
             connection.setEx(keyPrefix + cacheKey, ttlSeconds, encode(authResult));
         }
     }

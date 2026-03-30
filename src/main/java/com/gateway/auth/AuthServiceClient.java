@@ -119,11 +119,13 @@ public final class AuthServiceClient {
             userId = firstHeader(response, ServiceHeaders.Trusted.USER_ID);
         }
         String role = firstJsonField(responseBody, ROLE_FIELD);
-        if (role == null ) role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
-        if (role.isBlank()) role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
+        if (role == null || role.isBlank()) {
+            role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
+        }
         String sessionId = firstJsonField(responseBody, SESSION_ID_FIELD);
-        if (sessionId == null) sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
-        if (sessionId.isBlank()) sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
+        }
 
         boolean authenticated = response.statusCode() == 200
                 && isAuthenticated(responseBody)

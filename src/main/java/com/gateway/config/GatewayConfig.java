@@ -40,6 +40,7 @@ public final class GatewayConfig {
     private final boolean permissionCacheEnabled;
     private final String redisHost;
     private final int redisPort;
+    private final String redisPassword;
     private final int redisTimeoutMs;
     private final int permissionCacheTtlSeconds;
     private final String permissionCacheKeyPrefix;
@@ -94,6 +95,7 @@ public final class GatewayConfig {
             boolean permissionCacheEnabled,
             String redisHost,
             int redisPort,
+            String redisPassword,
             int redisTimeoutMs,
             int permissionCacheTtlSeconds,
             String permissionCacheKeyPrefix,
@@ -146,6 +148,7 @@ public final class GatewayConfig {
         this.permissionCacheEnabled = permissionCacheEnabled;
         this.redisHost = redisHost;
         this.redisPort = redisPort;
+        this.redisPassword = redisPassword;
         this.redisTimeoutMs = redisTimeoutMs;
         this.permissionCacheTtlSeconds = permissionCacheTtlSeconds;
         this.permissionCacheKeyPrefix = permissionCacheKeyPrefix;
@@ -198,6 +201,7 @@ public final class GatewayConfig {
         boolean permissionCacheEnabled = false;
         String redisHost = env.getOrDefault("REDIS_HOST", "127.0.0.1");
         int redisPort = parseInt(env.get("REDIS_PORT"), 6379, "REDIS_PORT");
+        String redisPassword = env.get("REDIS_PASSWORD");
         int redisTimeoutMs = parseInt(env.get("REDIS_TIMEOUT_MS"), 1000, "REDIS_TIMEOUT_MS");
         int permissionCacheTtlSeconds = parseInt(env.get("GATEWAY_PERMISSION_CACHE_TTL_SECONDS"), 300, "GATEWAY_PERMISSION_CACHE_TTL_SECONDS");
         String permissionCacheKeyPrefix = env.getOrDefault("GATEWAY_PERMISSION_CACHE_PREFIX", "gateway:admin-permission:");
@@ -292,6 +296,7 @@ public final class GatewayConfig {
                 permissionCacheEnabled,
                 redisHost,
                 redisPort,
+                redisPassword,
                 redisTimeoutMs,
                 permissionCacheTtlSeconds,
                 permissionCacheKeyPrefix,
@@ -492,6 +497,10 @@ public final class GatewayConfig {
 
     public int redisPort() {
         return redisPort;
+    }
+
+    public String redisPassword() {
+        return redisPassword;
     }
 
     public int redisTimeoutMs() {

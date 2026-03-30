@@ -16,11 +16,16 @@ public final class RedisConnection implements AutoCloseable {
     private final BufferedOutputStream out;
 
     public RedisConnection(String host, int port, int timeoutMs) throws IOException {
+        this(host, port, timeoutMs, null);
+    }
+
+    public RedisConnection(String host, int port, int timeoutMs, String password) throws IOException {
         this.socket = new Socket();
         socket.connect(new InetSocketAddress(host, port), timeoutMs);
         socket.setSoTimeout(timeoutMs);
         this.in = new BufferedInputStream(socket.getInputStream());
         this.out = new BufferedOutputStream(socket.getOutputStream());
+        authenticate(password);
     }
 
     public String get(String key) throws IOException {
@@ -31,6 +36,15 @@ public final class RedisConnection implements AutoCloseable {
 
     public void setEx(String key, int ttlSeconds, String value) throws IOException {
         writeArray("SETEX", key, String.valueOf(ttlSeconds), value);
+        out.flush();
+        readSimpleString();
+    }
+
+    private void authenticate(String password) throws IOException {
+        if (password == null || password.isBlank()) {
+            return;
+        }
+        writeArray("AUTH", password);
         out.flush();
         readSimpleString();
     }

@@ -18,7 +18,7 @@ services:
       BLOCK_SERVICE_URL: ${BLOCK_SERVICE_URL:-http://documents-service:8083}
       PERMISSION_SERVICE_URL: ${PERMISSION_SERVICE_URL:-http://permission-service:8084}
       PERMISSION_ADMIN_VERIFY_URL: ${PERMISSION_ADMIN_VERIFY_URL:-http://permission-service:8084/permissions/internal/admin/verify}
-      REDIS_HOST: ${REDIS_HOST:-redis-server}
+      REDIS_HOST: ${REDIS_HOST:-central-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_TIMEOUT_MS: ${REDIS_TIMEOUT_MS:-1000}
       GATEWAY_SESSION_CACHE_ENABLED: ${GATEWAY_SESSION_CACHE_ENABLED:-true}

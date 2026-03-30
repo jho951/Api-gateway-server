@@ -339,6 +339,7 @@ public final class GatewayConfig {
         routes.add(new RouteDefinition(AuthApiPaths.LOGIN, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZE_ALL, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.SSO_START, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(AuthApiPaths.SSO_START_LEGACY, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(AuthApiPaths.EXCHANGE, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.REFRESH, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.LOGOUT, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));

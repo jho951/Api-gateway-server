@@ -8,6 +8,7 @@ public final class AuthApiPaths {
     public static final String LOGIN = "/v1/auth/login";
     public static final String OAUTH2_AUTHORIZE_ALL = "/v1/auth/oauth2/authorize/**";
     public static final String SSO_START = "/v1/auth/sso/start";
+    public static final String SSO_START_LEGACY = "/auth/sso/start";
     public static final String EXCHANGE = "/v1/auth/exchange";
     public static final String ME = "/v1/auth/me";
     public static final String REFRESH = "/v1/auth/refresh";

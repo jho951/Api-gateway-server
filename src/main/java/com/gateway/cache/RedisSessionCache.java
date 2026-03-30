@@ -54,6 +54,8 @@ public final class RedisSessionCache {
                 + DELIMITER
                 + safe(authResult.getRole())
                 + DELIMITER
+                + safe(authResult.getStatus())
+                + DELIMITER
                 + safe(authResult.getSessionId());
     }
 
@@ -62,7 +64,7 @@ public final class RedisSessionCache {
             return null;
         }
         String[] parts = payload.split(String.valueOf(DELIMITER), -1);
-        if (parts.length != 3) {
+        if (parts.length != 3 && parts.length != 4) {
             return null;
         }
         String userId = emptyToNull(parts[0]);
@@ -70,8 +72,9 @@ public final class RedisSessionCache {
             return null;
         }
         String role = emptyToNull(parts[1]);
-        String sessionId = emptyToNull(parts[2]);
-        return new AuthResult(200, true, userId, role, sessionId);
+        String status = parts.length == 4 ? emptyToNull(parts[2]) : "A";
+        String sessionId = parts.length == 4 ? emptyToNull(parts[3]) : emptyToNull(parts[2]);
+        return new AuthResult(200, true, userId, role, status, sessionId);
     }
 
     private static String safe(String value) {

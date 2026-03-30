@@ -12,6 +12,7 @@ public final class AuthResult {
     private final boolean authenticated;
     private final String userId;
     private final String role;
+    private final String status;
     private final String sessionId;
 
     /**
@@ -22,11 +23,12 @@ public final class AuthResult {
      * @param role 사용자 역할
      * @param sessionId 세션 ID
      */
-    public AuthResult(int statusCode, boolean authenticated, String userId, String role, String sessionId) {
+    public AuthResult(int statusCode, boolean authenticated, String userId, String role, String status, String sessionId) {
         this.statusCode = statusCode;
         this.authenticated = authenticated;
         this.userId = userId;
         this.role = role;
+        this.status = status;
         this.sessionId = sessionId;
     }
 
@@ -38,16 +40,24 @@ public final class AuthResult {
     public String getRole() {
         return role;
     }
+    public String getStatus() {
+        return status;
+    }
     public String getSessionId() {return sessionId;}
     public boolean isAdmin() {return "ADMIN".equalsIgnoreCase(role);}
 
     public Map<String, List<String>> toTrustedHeaders(String requestId, String correlationId) {
         return Map.of(
-                ServiceHeaders.Trusted.USER_ID, List.of(userId),
-                ServiceHeaders.Trusted.USER_ROLE, List.of(role),
-                ServiceHeaders.Trusted.SESSION_ID, List.of(sessionId),
+                ServiceHeaders.Trusted.USER_ID, List.of(safe(userId)),
+                ServiceHeaders.Trusted.USER_ROLE, List.of(safe(role)),
+                ServiceHeaders.Trusted.USER_STATUS, List.of(safe(status)),
+                ServiceHeaders.Trusted.SESSION_ID, List.of(safe(sessionId)),
                 TraceHeaders.REQUEST_ID, List.of(requestId),
                 TraceHeaders.CORRELATION_ID, List.of(correlationId)
         );
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
     }
 }

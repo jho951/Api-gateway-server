@@ -25,6 +25,7 @@ public final class AuthServiceClient {
     private static final Pattern BOOLEAN_FIELD = Pattern.compile("\"authenticated\"\\s*:\\s*(true|false)");
     private static final Pattern USER_ID_FIELD = Pattern.compile("\"userId\"\\s*:\\s*\"([^\"]+)\"");
     private static final Pattern ROLE_FIELD = Pattern.compile("\"role\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern STATUS_FIELD = Pattern.compile("\"status\"\\s*:\\s*\"([^\"]+)\"");
     private static final Pattern SESSION_ID_FIELD = Pattern.compile("\"sessionId\"\\s*:\\s*\"([^\"]+)\"");
 
     private final HttpClient client;
@@ -122,6 +123,10 @@ public final class AuthServiceClient {
         if (role == null || role.isBlank()) {
             role = firstHeader(response, ServiceHeaders.Trusted.USER_ROLE);
         }
+        String status = firstJsonField(responseBody, STATUS_FIELD);
+        if (status == null || status.isBlank()) {
+            status = firstHeader(response, ServiceHeaders.Trusted.USER_STATUS);
+        }
         String sessionId = firstJsonField(responseBody, SESSION_ID_FIELD);
         if (sessionId == null || sessionId.isBlank()) {
             sessionId = firstHeader(response, ServiceHeaders.Trusted.SESSION_ID);
@@ -132,6 +137,6 @@ public final class AuthServiceClient {
                 && userId != null
                 && !userId.isBlank();
 
-        return new AuthResult(response.statusCode(), authenticated, userId, role, sessionId);
+        return new AuthResult(response.statusCode(), authenticated, userId, role, status, sessionId);
     }
 }

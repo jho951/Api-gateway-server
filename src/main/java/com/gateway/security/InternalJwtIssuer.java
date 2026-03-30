@@ -27,16 +27,18 @@ public final class InternalJwtIssuer {
         this.ttlSeconds = Math.max(30L, ttlSeconds);
     }
 
-    public String issueForUser(String userId) {
+    public String issueForUser(String userId, String status) {
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("userId must not be blank");
         }
         long now = Instant.now().getEpochSecond();
         long exp = now + ttlSeconds;
+        String normalizedStatus = status == null || status.isBlank() ? "A" : status;
 
         String headerJson = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
         String payloadJson = "{\"sub\":\"" + escapeJson(userId) + "\","
                 + "\"userId\":\"" + escapeJson(userId) + "\","
+                + "\"status\":\"" + escapeJson(normalizedStatus) + "\","
                 + "\"iss\":\"" + escapeJson(issuer) + "\","
                 + "\"aud\":\"" + escapeJson(audience) + "\","
                 + "\"iat\":" + now + ","

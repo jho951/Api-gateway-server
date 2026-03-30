@@ -13,6 +13,7 @@ public final class TrustedHeaderNames {
     public static final Set<String> ALL = Set.of(
             ServiceHeaders.Trusted.USER_ID.toLowerCase(),
             ServiceHeaders.Trusted.USER_ROLE.toLowerCase(),
+            ServiceHeaders.Trusted.USER_STATUS.toLowerCase(),
             ServiceHeaders.Trusted.SESSION_ID.toLowerCase(),
             ServiceHeaders.Auth.INTERNAL_REQUEST_SECRET.toLowerCase(),
             TraceHeaders.REQUEST_ID.toLowerCase(),

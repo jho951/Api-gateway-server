@@ -117,6 +117,7 @@ public final class GatewayHandler implements HttpHandler {
 
         String authOutcome = "FORWARDED";
         String resolvedUserId = "";
+        String resolvedUserStatus = "";
         String upstreamAuthorizationHeader = null;
         String requestPath = "/";
         String upstreamName = "gateway";
@@ -167,6 +168,7 @@ public final class GatewayHandler implements HttpHandler {
                         throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
                     }
                     resolvedUserId = sessionAuthResult.getUserId();
+                    resolvedUserStatus = resolveUserStatus(sessionAuthResult.getStatus());
                     authOutcome = "COOKIE_SESSION_VALIDATED";
                 } else {
                     JwtPrecheckPolicy.Result precheckResult = jwtPrecheckPolicy.precheck(authForVerification);
@@ -178,6 +180,7 @@ public final class GatewayHandler implements HttpHandler {
                     AuthResult cachedAuthResult = localSessionCache.get(cacheKey);
                     if (cachedAuthResult != null && cachedAuthResult.isAuthenticated() && hasUserId(cachedAuthResult)) {
                         resolvedUserId = cachedAuthResult.getUserId();
+                        resolvedUserStatus = resolveUserStatus(cachedAuthResult.getStatus());
                         authOutcome = "SESSION_CACHE_L1";
                     } else {
                         if (redisSessionCache.enabled()) {
@@ -190,6 +193,7 @@ public final class GatewayHandler implements HttpHandler {
                             if (cachedAuthResult != null && cachedAuthResult.isAuthenticated() && hasUserId(cachedAuthResult)) {
                                 localSessionCache.put(cacheKey, cachedAuthResult);
                                 resolvedUserId = cachedAuthResult.getUserId();
+                                resolvedUserStatus = resolveUserStatus(cachedAuthResult.getStatus());
                                 authOutcome = "SESSION_CACHE_L2";
                             }
                         }
@@ -205,7 +209,18 @@ public final class GatewayHandler implements HttpHandler {
                             throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
                         }
 
-                        AuthResult verifiedAuthResult = new AuthResult(200, true, resolvedUserId, null, null);
+                        AuthResult verifiedAuthResult = authServiceClient.validateSession(
+                                config.authServiceUri(),
+                                authForVerification,
+                                null,
+                                requestId,
+                                correlationId
+                        );
+                        if (!verifiedAuthResult.isAuthenticated() || !hasUserId(verifiedAuthResult)) {
+                            throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
+                        }
+                        resolvedUserId = verifiedAuthResult.getUserId();
+                        resolvedUserStatus = resolveUserStatus(verifiedAuthResult.getStatus());
                         localSessionCache.put(cacheKey, verifiedAuthResult);
                         if (redisSessionCache.enabled()) {
                             try {
@@ -217,7 +232,10 @@ public final class GatewayHandler implements HttpHandler {
                     }
                 }
 
-                upstreamAuthorizationHeader = internalJwtIssuer.issueForUser(resolvedUserId);
+                if (resolvedUserStatus == null || resolvedUserStatus.isBlank()) {
+                    resolvedUserStatus = "A";
+                }
+                upstreamAuthorizationHeader = internalJwtIssuer.issueForUser(resolvedUserId, resolvedUserStatus);
             }
 
             enforceBodySize(exchange);
@@ -225,7 +243,7 @@ public final class GatewayHandler implements HttpHandler {
             Map<String, List<String>> proxiedHeaders = sanitizeInboundHeaders(exchange, match.route());
             proxiedHeaders.put(TraceHeaders.REQUEST_ID, List.of(requestId));
             proxiedHeaders.put(TraceHeaders.CORRELATION_ID, List.of(correlationId));
-            injectTrustedContext(proxiedHeaders, resolvedUserId);
+            injectTrustedContext(proxiedHeaders, resolvedUserId, resolvedUserStatus);
             injectUpstreamAuthorization(proxiedHeaders, upstreamAuthorizationHeader);
 
             byte[] requestBody = adapter.readBody();
@@ -302,6 +320,13 @@ public final class GatewayHandler implements HttpHandler {
             );
             adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
         } catch (IOException ex) {
+            log.log(Level.WARNING,
+                    "requestId=" + requestId
+                            + " upstream_request_failed"
+                            + " method=" + requestMethod
+                            + " path=" + requestPath
+                            + " upstream=" + upstreamName,
+                    ex);
             GatewayExceptionHandler.ResponseSpec responseSpec =
                     GatewayExceptionHandler.fromErrorCode(GatewayErrorCode.UPSTREAM_FAILURE, requestPath, requestId);
             gatewayAuditService.logRequest(
@@ -383,6 +408,7 @@ public final class GatewayHandler implements HttpHandler {
     private boolean isLoginPath(String path) {
         return AuthApiPaths.LOGIN.equals(path)
                 || AuthApiPaths.SSO_START.equals(path)
+                || AuthApiPaths.SSO_START_LEGACY.equals(path)
                 || path.startsWith("/v1/auth/oauth2/authorize/")
                 || path.startsWith("/v1/oauth2/authorization/");
     }
@@ -494,11 +520,21 @@ public final class GatewayHandler implements HttpHandler {
         return config.forwardAuthorizationHeader();
     }
 
-    private void injectTrustedContext(Map<String, List<String>> proxiedHeaders, String resolvedUserId) {
+    private void injectTrustedContext(Map<String, List<String>> proxiedHeaders, String resolvedUserId, String resolvedUserStatus) {
         if (resolvedUserId == null || resolvedUserId.isBlank()) {
             return;
         }
         proxiedHeaders.put(InternalServiceApi.Headers.USER_ID, List.of(resolvedUserId));
+        if (resolvedUserStatus != null && !resolvedUserStatus.isBlank()) {
+            proxiedHeaders.put(InternalServiceApi.Headers.USER_STATUS, List.of(resolvedUserStatus));
+        }
+    }
+
+    private String resolveUserStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return "A";
+        }
+        return status;
     }
 
     private void injectUpstreamAuthorization(Map<String, List<String>> proxiedHeaders, String authorizationHeader) {
@@ -559,6 +595,7 @@ public final class GatewayHandler implements HttpHandler {
 
     private boolean isOAuthFlowPath(String path) {
         return AuthApiPaths.SSO_START.equals(path)
+                || AuthApiPaths.SSO_START_LEGACY.equals(path)
                 || AuthApiPaths.EXCHANGE.equals(path)
                 || path.startsWith("/v1/oauth2/")
                 || path.startsWith("/v1/login/oauth2/");

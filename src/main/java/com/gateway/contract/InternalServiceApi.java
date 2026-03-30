@@ -14,6 +14,7 @@ public final class InternalServiceApi {
 
         public static final String USER_ID = ServiceHeaders.Trusted.USER_ID;
         public static final String USER_ROLE = ServiceHeaders.Trusted.USER_ROLE;
+        public static final String USER_STATUS = ServiceHeaders.Trusted.USER_STATUS;
         public static final String SESSION_ID = ServiceHeaders.Trusted.SESSION_ID;
 
         public static final String REQUEST_ID = TraceHeaders.REQUEST_ID;

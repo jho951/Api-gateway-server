@@ -17,6 +17,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -27,10 +28,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/** Gateway 인증/프록시 경로의 통합 동작을 검증하는 테스트입니다. */
 class GatewayHandlerAuthIntegrationTest {
     private HttpServer authServer;
     private HttpServer userServer;
     private HttpServer blockServer;
+    private HttpServer permissionServer;
     private HttpServer gatewayServer;
 
     @AfterEach
@@ -39,6 +42,7 @@ class GatewayHandlerAuthIntegrationTest {
         stopServer(authServer);
         stopServer(userServer);
         stopServer(blockServer);
+        stopServer(permissionServer);
     }
 
     @Test
@@ -87,6 +91,125 @@ class GatewayHandlerAuthIntegrationTest {
         assertEquals("user-123", userIdHeaderSeenByBlock.get());
         assertEquals("A", userStatusHeaderSeenByBlock.get());
         assertEquals("A", jwtClaim(authHeaderSeenByBlock.get(), "status"));
+    }
+
+    @Test
+    void editorOperationRouteRewritesV1PrefixAndForwardsToEditorServer() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicReference<String> blockMethod = new AtomicReference<>();
+        AtomicReference<String> blockPath = new AtomicReference<>();
+        AtomicReference<String> userIdHeaderSeenByBlock = new AtomicReference<>();
+        startUpstreams(validateCalls, "editor-user", blockCalls, exchange -> {
+            blockMethod.set(exchange.getRequestMethod());
+            blockPath.set(exchange.getRequestURI().getPath());
+            userIdHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("X-User-Id"));
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, null, null, null);
+        startGateway();
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create("http://127.0.0.1:" + gatewayServer.getAddress().getPort()
+                        + "/v1/editor-operations/documents/00000000-0000-0000-0000-000000000001/save"))
+                .timeout(Duration.ofSeconds(3))
+                .header("Cookie", "sso_session=session-editor; Path=/; HttpOnly")
+                .header("Origin", "http://localhost:5173")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"batchId\":\"batch-1\",\"operations\":[]}"))
+                .build();
+
+        HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertEquals(1, validateCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertEquals("POST", blockMethod.get());
+        assertEquals("/editor-operations/documents/00000000-0000-0000-0000-000000000001/save", blockPath.get());
+        assertEquals("editor-user", userIdHeaderSeenByBlock.get());
+    }
+
+    @Test
+    void workspacesRouteRewritesV1PrefixAndForwardsToEditorServer() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicReference<String> blockPath = new AtomicReference<>();
+        AtomicReference<String> userIdHeaderSeenByBlock = new AtomicReference<>();
+        startUpstreams(validateCalls, "workspace-user", blockCalls, exchange -> {
+            blockPath.set(exchange.getRequestURI().getPath());
+            userIdHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("X-User-Id"));
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, null, null, null);
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayRequest(
+                "/v1/workspaces/00000000-0000-0000-0000-000000000002",
+                null,
+                "sso_session=session-workspace; Path=/; HttpOnly",
+                Map.of("Origin", "http://localhost:5173")
+        );
+
+        assertEquals(200, response.statusCode());
+        assertEquals(1, validateCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertEquals("/workspaces/00000000-0000-0000-0000-000000000002", blockPath.get());
+        assertEquals("workspace-user", userIdHeaderSeenByBlock.get());
+    }
+
+    @Test
+    void documentsWithBasicExchangesToBearerValidatesAndForwardsInternalJwt() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicReference<String> authHeaderSeenByValidate = new AtomicReference<>();
+        AtomicReference<String> authHeaderSeenByBlock = new AtomicReference<>();
+        AtomicReference<String> userIdHeaderSeenByBlock = new AtomicReference<>();
+        startUpstreams(validateCalls, "user-basic", blockCalls, exchange -> {
+            authHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            userIdHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("X-User-Id"));
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, exchange -> {
+            authHeaderSeenByValidate.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            writeJson(exchange, 200, "{\"authenticated\":true,\"userId\":\"user-basic\",\"status\":\"A\"}");
+        }, null, null);
+        startGateway();
+
+        String basicCredential = Base64.getEncoder()
+                .encodeToString("basic-user:basic-pass".getBytes(StandardCharsets.UTF_8));
+        HttpResponse<String> response = sendGatewayRequest(
+                "/v1/documents/doc-basic",
+                "Basic " + basicCredential,
+                null,
+                Map.of("X-Client-Type", "api")
+        );
+
+        assertEquals(200, response.statusCode());
+        assertEquals(1, validateCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertNotNull(authHeaderSeenByValidate.get());
+        assertTrue(authHeaderSeenByValidate.get().startsWith("Bearer "));
+        assertNotNull(authHeaderSeenByBlock.get());
+        assertTrue(authHeaderSeenByBlock.get().startsWith("Bearer "));
+        assertEquals("user-basic", userIdHeaderSeenByBlock.get());
+    }
+
+    @Test
+    void documentsWithRejectedBasicReturnsUnauthorizedWithoutValidation() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        startUpstreams(validateCalls, null, blockCalls, null, null, null, null);
+        startGateway();
+
+        String basicCredential = Base64.getEncoder()
+                .encodeToString("bad-user:bad-pass".getBytes(StandardCharsets.UTF_8));
+        HttpResponse<String> response = sendGatewayRequest(
+                "/v1/documents/doc-basic",
+                "Basic " + basicCredential,
+                null,
+                Map.of("X-Client-Type", "api")
+        );
+
+        assertEquals(401, response.statusCode());
+        assertEquals(0, validateCalls.get());
+        assertEquals(0, blockCalls.get());
     }
 
     @Test
@@ -212,6 +335,80 @@ class GatewayHandlerAuthIntegrationTest {
     }
 
     @Test
+    void adminRouteChecksPermissionServiceBeforeForwarding() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicInteger permissionCalls = new AtomicInteger();
+        AtomicReference<String> permissionMethod = new AtomicReference<>();
+        AtomicReference<String> permissionPath = new AtomicReference<>();
+        AtomicReference<String> blockPath = new AtomicReference<>();
+
+        startPermissionServer(exchange -> {
+            permissionCalls.incrementAndGet();
+            permissionMethod.set(exchange.getRequestHeaders().getFirst("X-Original-Method"));
+            permissionPath.set(exchange.getRequestHeaders().getFirst("X-Original-Path"));
+            writeJson(exchange, 200, "{\"allowed\":true}");
+        });
+        startUpstreams(validateCalls, "admin-123", blockCalls, exchange -> {
+            blockPath.set(exchange.getRequestURI().getPath());
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, exchange -> writeJson(
+                exchange,
+                200,
+                "{\"authenticated\":true,\"userId\":\"admin-123\",\"role\":\"ADMIN\",\"status\":\"A\",\"sessionId\":\"session-admin\"}"
+        ), null, null);
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayRequest(
+                "/v1/admin/dashboard",
+                null,
+                "sso_session=session-admin; Path=/; HttpOnly",
+                Map.of("Origin", "http://localhost:5173")
+        );
+
+        assertEquals(200, response.statusCode());
+        assertEquals(1, validateCalls.get());
+        assertEquals(1, permissionCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertEquals("GET", permissionMethod.get());
+        assertEquals("/v1/admin/dashboard", permissionPath.get());
+        assertEquals("/admin/dashboard", blockPath.get());
+    }
+
+    @Test
+    void adminRouteDeniedWhenPermissionServiceRejects() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicInteger permissionCalls = new AtomicInteger();
+
+        startPermissionServer(exchange -> {
+            permissionCalls.incrementAndGet();
+            exchange.sendResponseHeaders(403, -1);
+            exchange.close();
+        });
+        startUpstreams(validateCalls, "admin-123", blockCalls, exchange -> {
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, exchange -> writeJson(
+                exchange,
+                200,
+                "{\"authenticated\":true,\"userId\":\"admin-123\",\"role\":\"ADMIN\",\"status\":\"A\",\"sessionId\":\"session-admin\"}"
+        ), null, null);
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayRequest(
+                "/v1/admin/dashboard",
+                null,
+                "sso_session=session-admin; Path=/; HttpOnly",
+                Map.of("Origin", "http://localhost:5173")
+        );
+
+        assertEquals(403, response.statusCode());
+        assertEquals(1, validateCalls.get());
+        assertEquals(1, permissionCalls.get());
+        assertEquals(0, blockCalls.get());
+    }
+
+    @Test
     void internalPathWithoutInternalSecretReturnsForbidden() throws Exception {
         AtomicInteger validateCalls = new AtomicInteger();
         AtomicInteger blockCalls = new AtomicInteger();
@@ -283,6 +480,14 @@ class GatewayHandlerAuthIntegrationTest {
             }
             writeJson(exchange, 200, "{\"authenticated\":true,\"userId\":\"" + validatedUserId + "\",\"status\":\"A\"}");
         });
+        authServer.createContext("/auth/login", exchange -> {
+            if (validatedUserId == null) {
+                writeJson(exchange, 401, "{\"authenticated\":false}");
+                return;
+            }
+            String accessToken = jwt("{\"sub\":\"" + validatedUserId + "\",\"exp\":4102444800}");
+            writeJson(exchange, 200, "{\"accessToken\":\"" + accessToken + "\",\"refreshToken\":\"refresh-token\"}");
+        });
         authServer.createContext("/auth/me", exchange -> {
             if (authMeHandler != null) {
                 authMeHandler.handle(exchange);
@@ -309,32 +514,53 @@ class GatewayHandlerAuthIntegrationTest {
         userServer.start();
 
         blockServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        blockServer.createContext("/documents", exchange -> {
+        HttpHandler blockEntry = exchange -> {
             blockCalls.incrementAndGet();
             if (blockHandler != null) {
                 blockHandler.handle(exchange);
                 return;
             }
             writeJson(exchange, 200, "{\"ok\":true}");
-        });
+        };
+        blockServer.createContext("/documents", blockEntry);
+        blockServer.createContext("/workspaces", blockEntry);
+        blockServer.createContext("/editor-operations", blockEntry);
+        blockServer.createContext("/admin", blockEntry);
         blockServer.start();
     }
 
     private void startGateway() throws IOException {
-        Map<String, String> env = Map.of(
-                "GATEWAY_BIND", "127.0.0.1",
-                "GATEWAY_PORT", "0",
-                "GATEWAY_INTERNAL_IP_GUARD_ENABLED", "false",
-                "GATEWAY_IP_GUARD_ENABLED", "false",
-                "AUTH_JWT_VERIFY_ENABLED", "false",
-                "AUTH_SERVICE_URL", "http://127.0.0.1:" + authServer.getAddress().getPort(),
-                "USER_SERVICE_URL", "http://127.0.0.1:" + userServer.getAddress().getPort(),
-                "BLOCK_SERVICE_URL", "http://127.0.0.1:" + blockServer.getAddress().getPort()
-        );
+        Map<String, String> env = new HashMap<>();
+        env.put("GATEWAY_BIND", "127.0.0.1");
+        env.put("GATEWAY_PORT", "0");
+        env.put("GATEWAY_INTERNAL_IP_GUARD_ENABLED", "false");
+        env.put("GATEWAY_IP_GUARD_ENABLED", "false");
+        env.put("GATEWAY_PERMISSION_CACHE_ENABLED", "false");
+        env.put("AUTH_JWT_VERIFY_ENABLED", "false");
+        env.put("AUTH_SERVICE_URL", "http://127.0.0.1:" + authServer.getAddress().getPort());
+        env.put("USER_SERVICE_URL", "http://127.0.0.1:" + userServer.getAddress().getPort());
+        env.put("BLOCK_SERVICE_URL", "http://127.0.0.1:" + blockServer.getAddress().getPort());
+        if (permissionServer != null) {
+            String permissionBase = "http://127.0.0.1:" + permissionServer.getAddress().getPort();
+            env.put("PERMISSION_SERVICE_URL", permissionBase);
+            env.put("PERMISSION_ADMIN_VERIFY_URL", permissionBase + "/permissions/internal/admin/verify");
+        }
         GatewayConfig config = GatewayConfig.fromEnv(env);
         gatewayServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         gatewayServer.createContext("/", new GatewayHandler(config));
         gatewayServer.start();
+    }
+
+    private void startPermissionServer(HttpHandler permissionHandler) throws IOException {
+        permissionServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        permissionServer.createContext("/permissions/internal/admin/verify", exchange -> {
+            if (permissionHandler != null) {
+                permissionHandler.handle(exchange);
+                return;
+            }
+            writeJson(exchange, 200, "{\"allowed\":true}");
+        });
+        permissionServer.start();
     }
 
     private HttpResponse<String> sendGatewayRequest(String path, String authorizationHeader, String cookieHeader) throws Exception {

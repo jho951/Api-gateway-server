@@ -7,12 +7,28 @@ group = providers.gradleProperty('projectGroup').get()
 version = providers.gradleProperty('projectVersion').get()
 
 repositories {
+    mavenLocal()
     mavenCentral()
-}
 
-ext {
-    ipGuardVersion = '2.0.5'
-    auditLogVersion = '1.0.1'
+    def githubPackagesUsername = providers.gradleProperty('githubPackagesUsername')
+            .orElse(providers.environmentVariable('GITHUB_ACTOR'))
+            .orElse('jho951')
+    def githubPackagesToken = providers.gradleProperty('githubPackagesToken')
+            .orElse(providers.gradleProperty('ghToken'))
+            .orElse(providers.gradleProperty('gh_token'))
+            .orElse(providers.environmentVariable('GH_TOKEN'))
+            .orElse(providers.environmentVariable('GITHUB_TOKEN'))
+
+    ['platform-governance', 'platform-security'].each { repoName ->
+        maven {
+            name = "GitHubPackages_${repoName.replace('-', '_')}"
+            url = uri("https://maven.pkg.github.com/jho951/${repoName}")
+            credentials {
+                username = githubPackagesUsername.get()
+                password = githubPackagesToken.orNull
+            }
+        }
+    }
 }
 
 java {
@@ -26,9 +42,10 @@ application {
 }
 
 dependencies {
-    implementation "io.github.jho951:ip-guard-core:${ipGuardVersion}"
-    implementation "io.github.jho951:ip-guard-spi:${ipGuardVersion}"
-    implementation "io.github.jho951:core:${auditLogVersion}"
+    implementation platform("io.github.jho951.platform:platform-governance-bom:1.0.0")
+    implementation platform("io.github.jho951.platform:platform-security-bom:1.0.3")
+    implementation "io.github.jho951.platform:platform-governance-spring-boot-starter"
+    implementation "io.github.jho951.platform:platform-security-starter"
 
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'

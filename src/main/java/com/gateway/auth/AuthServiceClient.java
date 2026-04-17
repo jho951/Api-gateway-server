@@ -3,6 +3,7 @@ package com.gateway.auth;
 import com.gateway.contract.internal.path.ServicePaths;
 import com.gateway.contract.internal.header.TraceHeaders;
 import com.gateway.contract.internal.header.ServiceHeaders;
+import com.gateway.http.Jsons;
 
 import java.time.Duration;
 import java.io.IOException;
@@ -12,6 +13,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -35,6 +39,10 @@ public final class AuthServiceClient {
     private static final Pattern STATUS_FIELD = Pattern.compile("\"status\"\\s*:\\s*\"([^\"]+)\"");
     // "sessionId": random_string_... (사용자 고유 연결 번호)
     private static final Pattern SESSION_ID_FIELD = Pattern.compile("\"sessionId\"\\s*:\\s*\"([^\"]+)\"");
+    // auth-service 표준 토큰 응답 필드
+    private static final Pattern ACCESS_TOKEN_FIELD = Pattern.compile("\"accessToken\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern ACCESS_TOKEN_SNAKE_FIELD = Pattern.compile("\"access_token\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern TOKEN_FIELD = Pattern.compile("\"token\"\\s*:\\s*\"([^\"]+)\"");
     // auth-service와 통신하는 실행기
     private final HttpClient client;
     // 너무 오래 걸리면 끊는 제한값
@@ -147,5 +155,105 @@ public final class AuthServiceClient {
                 && !userId.isBlank();
 
         return new AuthResult(response.statusCode(), authenticated, userId, role, status, sessionId);
+    }
+
+    /**
+     * Basic 인증 정보를 auth-service 로그인 API로 교환해 표준 Bearer 토큰 헤더로 정규화합니다.
+     *
+     * @param authServiceBaseUri 인증 서비스의 베이스 URI
+     * @param authorizationHeader 클라이언트가 보낸 Basic Authorization 헤더
+     * @param requestId 요청 추적을 위한 고유 ID
+     * @param correlationId 연관 관계 추적을 위한 ID
+     * @return 교환에 성공한 Bearer Authorization 헤더, 실패 시 null
+     * @throws IOException 네트워크 오류 발생 시
+     * @throws InterruptedException 요청 중단 시
+     */
+    public String exchangeBasicForBearer(
+            URI authServiceBaseUri,
+            String authorizationHeader,
+            String requestId,
+            String correlationId
+    ) throws IOException, InterruptedException {
+        BasicCredentials credentials = parseBasicCredentials(authorizationHeader);
+        if (credentials == null) {
+            return null;
+        }
+
+        URI targetUri = authServiceBaseUri.resolve(ServicePaths.Auth.LOGIN);
+        String requestBody = Jsons.toJson(Map.of(
+                "username", credentials.username(),
+                "password", credentials.password()
+        ));
+
+        HttpRequest request = HttpRequest.newBuilder(targetUri)
+                .timeout(timeout)
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+                .header("Content-Type", "application/json")
+                .header(TraceHeaders.REQUEST_ID, requestId)
+                .header(TraceHeaders.CORRELATION_ID, correlationId)
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            return null;
+        }
+
+        String responseBody = response.body() == null ? "" : response.body();
+        String accessToken = firstJsonField(responseBody, ACCESS_TOKEN_FIELD);
+        if (accessToken == null || accessToken.isBlank()) {
+            accessToken = firstJsonField(responseBody, ACCESS_TOKEN_SNAKE_FIELD);
+        }
+        if (accessToken == null || accessToken.isBlank()) {
+            accessToken = firstJsonField(responseBody, TOKEN_FIELD);
+        }
+        if (accessToken == null || accessToken.isBlank()) {
+            accessToken = firstHeader(response, "Authorization");
+        }
+        return normalizeBearer(accessToken);
+    }
+
+    private static BasicCredentials parseBasicCredentials(String authorizationHeader) {
+        if (authorizationHeader == null || authorizationHeader.isBlank()) {
+            return null;
+        }
+        if (!authorizationHeader.regionMatches(true, 0, "Basic ", 0, "Basic ".length())) {
+            return null;
+        }
+        String encodedCredentials = authorizationHeader.substring("Basic ".length()).trim();
+        if (encodedCredentials.isEmpty()) {
+            return null;
+        }
+        byte[] decoded;
+        try {
+            decoded = Base64.getDecoder().decode(encodedCredentials);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+        String credentials = new String(decoded, StandardCharsets.UTF_8);
+        int separatorIndex = credentials.indexOf(':');
+        if (separatorIndex <= 0) {
+            return null;
+        }
+        String username = credentials.substring(0, separatorIndex);
+        String password = credentials.substring(separatorIndex + 1);
+        if (username.isBlank() || password.isBlank()) {
+            return null;
+        }
+        return new BasicCredentials(username, password);
+    }
+
+    private static String normalizeBearer(String tokenOrAuthorizationHeader) {
+        if (tokenOrAuthorizationHeader == null || tokenOrAuthorizationHeader.isBlank()) {
+            return null;
+        }
+        String trimmed = tokenOrAuthorizationHeader.trim();
+        if (trimmed.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
+            String token = trimmed.substring("Bearer ".length()).trim();
+            return token.isEmpty() ? null : "Bearer " + token;
+        }
+        return "Bearer " + trimmed;
+    }
+
+    private record BasicCredentials(String username, String password) {
     }
 }

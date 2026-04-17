@@ -16,5 +16,20 @@
       <option name="name" value="MavenRepo" />
       <option name="url" value="https://repo.maven.apache.org/maven2/" />
     </remote-repository>
+    <remote-repository>
+      <option name="id" value="MavenLocal" />
+      <option name="name" value="MavenLocal" />
+      <option name="url" value="file:$MAVEN_REPOSITORY$/" />
+    </remote-repository>
+    <remote-repository>
+      <option name="id" value="GitHubPackages_platform_governance" />
+      <option name="name" value="GitHubPackages_platform_governance" />
+      <option name="url" value="https://maven.pkg.github.com/jho951/platform-governance" />
+    </remote-repository>
+    <remote-repository>
+      <option name="id" value="GitHubPackages_platform_security" />
+      <option name="name" value="GitHubPackages_platform_security" />
+      <option name="url" value="https://maven.pkg.github.com/jho951/platform-security" />
+    </remote-repository>
   </component>
 </project>

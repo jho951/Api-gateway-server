@@ -1,5 +1,6 @@
 package com.gateway.code;
 
+/** Gateway가 클라이언트에 반환하는 표준 에러 코드 집합입니다. */
 public enum GatewayErrorCode {
     INVALID_REQUEST(400, "1000", "요청 형식 또는 파라미터가 잘못된 경우"),
     INVALID_REQUEST_CHANNEL(400, "1001", "요청 채널을 판정할 수 없는 경우"),

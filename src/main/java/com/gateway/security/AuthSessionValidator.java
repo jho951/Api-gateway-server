@@ -85,6 +85,10 @@ public final class AuthSessionValidator {
         return AuthVerificationResult.fromService(AuthTokenVerifier.Result.skipped("COOKIE_SESSION_VALIDATED"), authResult);
     }
 
+    public String exchangeBasicForBearer(String authorizationHeader, String requestId, String correlationId) throws IOException, InterruptedException {
+        return authServiceClient.exchangeBasicForBearer(authServiceUri, authorizationHeader, requestId, correlationId);
+    }
+
     private CachedAuth loadCachedAuthResult(String cacheKey) {
         AuthResult cached = localCache.get(cacheKey);
         if (cached != null) {

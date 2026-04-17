@@ -4,6 +4,7 @@ import com.gateway.contract.external.path.AuthApiPaths;
 import com.gateway.contract.external.path.DocumentApiPaths;
 import com.gateway.contract.external.path.InternalApiPaths;
 import com.gateway.contract.external.path.UserApiPaths;
+import com.gateway.contract.internal.path.ServicePaths;
 import com.gateway.routing.RouteDefinition;
 import com.gateway.routing.RouteType;
 import com.gateway.security.IpGuardPolicy;
@@ -251,8 +252,7 @@ public final class GatewayConfig {
         List<String> gatewayUserIdClaimNames = EnvParsers.csvOrDefault(env.get("GATEWAY_USER_ID_CLAIMS"), List.of("sub", "userId"));
         boolean forwardAuthorizationHeader = parseBoolean(env.get("GATEWAY_FORWARD_AUTHORIZATION_HEADER"), false);
         boolean advancedRoutePoliciesEnabled = false;
-        boolean adminPermissionCheckEnabled = false;
-        boolean permissionCacheEnabled = false;
+        boolean permissionCacheEnabled = parseBoolean(env.get("GATEWAY_PERMISSION_CACHE_ENABLED"), false);
         String redisHost = env.getOrDefault("REDIS_HOST", "127.0.0.1");
         int redisPort = parseInt(env.get("REDIS_PORT"), 6379, "REDIS_PORT");
         String redisPassword = env.get("REDIS_PASSWORD");
@@ -297,8 +297,11 @@ public final class GatewayConfig {
         URI userServiceUri = requiredUri(env.get("USER_SERVICE_URL"), "USER_SERVICE_URL");
         URI blockServiceUri = requiredUri(env.get("BLOCK_SERVICE_URL"), "BLOCK_SERVICE_URL");
         URI permissionServiceUri = optionalUri(env.get("PERMISSION_SERVICE_URL"));
-
-        URI adminPermissionVerifyUri = null;
+        URI adminPermissionVerifyUri = optionalUri(env.get("PERMISSION_ADMIN_VERIFY_URL"));
+        if (adminPermissionVerifyUri == null && permissionServiceUri != null) {
+            adminPermissionVerifyUri = permissionServiceUri.resolve(ServicePaths.Permission.ADMIN_VERIFY);
+        }
+        boolean adminPermissionCheckEnabled = adminPermissionVerifyUri != null;
 
         List<String> allowedOrigins = EnvParsers.csvOrDefault(env.get("GATEWAY_CORS_ALLOWED_ORIGINS"), List.of("*"));
 
@@ -385,7 +388,7 @@ public final class GatewayConfig {
         List<RouteDefinition> routes = new ArrayList<>();
         routes.add(new RouteDefinition(AuthApiPaths.INTERNAL_ALL, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.LOGIN, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZE_ALL, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZE_GITHUB, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.SSO_START, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.SSO_START_LEGACY, RouteType.PUBLIC, "auth", authServiceUri));
         routes.add(new RouteDefinition(AuthApiPaths.EXCHANGE, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
@@ -402,10 +405,9 @@ public final class GatewayConfig {
         routes.add(new RouteDefinition(UserApiPaths.INTERNAL_FIND_OR_CREATE_AND_LINK_SOCIAL, RouteType.INTERNAL, "user", userServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(UserApiPaths.INTERNAL_USERS_ALL, RouteType.INTERNAL, "user", userServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(DocumentApiPaths.DOCUMENTS_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(DocumentApiPaths.ADMIN_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
-//        if (permissionServiceUri != null) {
-//            routes.add(new RouteDefinition(PermissionApiPaths.ALL, RouteType.PROTECTED, "permission", permissionServiceUri));
-//        }
+        routes.add(new RouteDefinition(DocumentApiPaths.WORKSPACES_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(DocumentApiPaths.EDITOR_OPERATIONS_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(DocumentApiPaths.ADMIN_ALL, RouteType.ADMIN, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
         routes.sort(RouteDefinition.MOST_SPECIFIC_FIRST);
         return List.copyOf(routes);
     }
@@ -448,92 +450,144 @@ public final class GatewayConfig {
         return rawValue;
     }
 
+    /** 게이트웨이가 바인딩할 네트워크 주소를 반환합니다. */
     public InetSocketAddress bindAddress() {
         return bindAddress;
     }
+    /** 외부 요청과 업스트림 호출에 공통으로 사용하는 타임아웃을 반환합니다. */
     public Duration requestTimeout() {
         return requestTimeout;
     }
+    /** auth-service 기본 URI를 반환합니다. */
     public URI authServiceUri() {
         return authServiceUri;
     }
+    /** user-service 기본 URI를 반환합니다. */
     public URI userServiceUri() {
         return userServiceUri;
     }
+    /** block-service 기본 URI를 반환합니다. */
     public URI blockServiceUri() {
         return blockServiceUri;
     }
+    /** permission-service 기본 URI를 반환합니다. */
     public URI permissionServiceUri() {
         return permissionServiceUri;
     }
+    /** 관리자 권한 검증용 내부 호출 URI를 반환합니다. */
     public URI adminPermissionVerifyUri() {
         return adminPermissionVerifyUri;
     }
+    /** CORS 허용 Origin 목록을 반환합니다. */
     public List<String> allowedOrigins() {
         return allowedOrigins;
     }
+    /** 외부 요청에 적용할 IP 허용 정책을 반환합니다. */
     public IpGuardPolicy ipPolicy() {
         return ipPolicy;
     }
+    /** 내부 서비스 호출에 적용할 IP 허용 정책을 반환합니다. */
     public IpGuardPolicy internalIpPolicy() {
         return internalIpPolicy;
     }
+    /** 관리자 경로에 적용할 IP 허용 정책을 반환합니다. */
     public IpGuardPolicy adminIpPolicy() {
         return adminIpPolicy;
     }
+    /** 로그인 요청 rate limit 값을 반환합니다. */
     public int loginRateLimitPerMinute() {
         return loginRateLimitPerMinute;
     }
+    /** 허용하는 최대 요청 본문 크기(bytes)를 반환합니다. */
     public int maxBodyBytes() {
         return maxBodyBytes;
     }
+    /** JWT exp 사전 점검 활성화 여부를 반환합니다. */
     public boolean jwtPrecheckExpEnabled() {
         return jwtPrecheckExpEnabled;
     }
+    /** JWT exp 사전 점검 허용 오차(초)를 반환합니다. */
     public int jwtPrecheckExpClockSkewSeconds() {
         return jwtPrecheckExpClockSkewSeconds;
     }
+    /** JWT 사전 점검 시 허용할 최대 토큰 길이를 반환합니다. */
     public int jwtPrecheckMaxTokenLength() {
         return jwtPrecheckMaxTokenLength;
     }
+    /** userId 추출에 사용할 JWT claim 이름 목록을 반환합니다. */
     public List<String> gatewayUserIdClaimNames() {
         return gatewayUserIdClaimNames;
     }
+    /** upstream으로 Authorization 헤더를 전달할지 여부를 반환합니다. */
     public boolean forwardAuthorizationHeader() {
         return forwardAuthorizationHeader;
     }
+    /** 관리자 권한 검증 캐시 활성화 여부를 반환합니다. */
     public boolean permissionCacheEnabled() {return permissionCacheEnabled;}
+    /** 관리자 권한 추가 검증 활성화 여부를 반환합니다. */
     public boolean adminPermissionCheckEnabled() {return adminPermissionCheckEnabled;}
+    /** 세분화된 라우트/인증 정책 활성화 여부를 반환합니다. */
     public boolean advancedRoutePoliciesEnabled() {return advancedRoutePoliciesEnabled;}
+    /** Redis 호스트를 반환합니다. */
     public String redisHost() {return redisHost;}
+    /** Redis 포트를 반환합니다. */
     public int redisPort() {return redisPort;}
+    /** Redis 비밀번호를 반환합니다. */
     public String redisPassword() {return redisPassword;}
+    /** Redis 연결/응답 타임아웃(ms)을 반환합니다. */
     public int redisTimeoutMs() {return redisTimeoutMs;}
+    /** 관리자 권한 캐시 TTL(초)을 반환합니다. */
     public int permissionCacheTtlSeconds() {return permissionCacheTtlSeconds;}
+    /** 관리자 권한 캐시 키 prefix를 반환합니다. */
     public String permissionCacheKeyPrefix() {return permissionCacheKeyPrefix;}
+    /** 세션 캐시 활성화 여부를 반환합니다. */
     public boolean sessionCacheEnabled() {return sessionCacheEnabled;}
+    /** 로컬 메모리 세션 캐시 TTL(초)을 반환합니다. */
     public int sessionLocalCacheTtlSeconds() {return sessionLocalCacheTtlSeconds;}
+    /** 분산 세션 캐시 TTL(초)을 반환합니다. */
     public int sessionCacheTtlSeconds() {return sessionCacheTtlSeconds;}
+    /** 세션 캐시 키 prefix를 반환합니다. */
     public String sessionCacheKeyPrefix() {return sessionCacheKeyPrefix;}
+    /** OAuth 관련 디버그 로그 활성화 여부를 반환합니다. */
     public boolean oauthDebugLogEnabled() {return oauthDebugLogEnabled;}
+    /** 감사 로그 활성화 여부를 반환합니다. */
     public boolean auditLogEnabled() {return auditLogEnabled;}
+    /** 감사 로그 파일 경로를 반환합니다. */
     public String auditLogPath() {return auditLogPath;}
+    /** 감사 로그에 기록할 서비스 이름을 반환합니다. */
     public String auditLogServiceName() {return auditLogServiceName;}
+    /** 감사 로그에 기록할 실행 환경 이름을 반환합니다. */
     public String auditLogEnv() {return auditLogEnv;}
+    /** 감사 로그 비동기 기록 활성화 여부를 반환합니다. */
     public boolean auditLogAsyncEnabled() {return auditLogAsyncEnabled;}
+    /** 감사 로그 비동기 처리 스레드 수를 반환합니다. */
     public int auditLogAsyncThreads() {return auditLogAsyncThreads;}
+    /** Gateway 내부 JWT 서명용 shared secret을 반환합니다. */
     public String internalJwtSharedSecret() {return internalJwtSharedSecret;}
+    /** Gateway 내부 JWT issuer를 반환합니다. */
     public String internalJwtIssuer() {return internalJwtIssuer;}
+    /** Gateway 내부 JWT audience를 반환합니다. */
     public String internalJwtAudience() {return internalJwtAudience;}
+    /** Gateway 내부 JWT 만료 시간(초)을 반환합니다. */
     public int internalJwtTtlSeconds() {return internalJwtTtlSeconds;}
+    /** INTERNAL 라우트 접근 시 요구되는 호출 주체 비밀값을 반환합니다. */
     public String internalRequestSecret() {return internalRequestSecret;}
+    /** auth-service 토큰 검증 활성화 여부를 반환합니다. */
     public boolean authJwtVerifyEnabled() {return authJwtVerifyEnabled;}
+    /** RSA 계열 JWT 검증용 공개키 PEM을 반환합니다. */
     public String authJwtPublicKeyPem() {return authJwtPublicKeyPem;}
+    /** HS 계열 JWT 검증용 shared secret을 반환합니다. */
     public String authJwtSharedSecret() {return authJwtSharedSecret;}
+    /** JWT 헤더 kid 필터링용 키 ID를 반환합니다. */
     public String authJwtKeyId() {return authJwtKeyId;}
+    /** 기대하는 JWT 서명 알고리즘을 반환합니다. */
     public String authJwtAlgorithm() {return authJwtAlgorithm;}
+    /** 기대하는 JWT issuer를 반환합니다. */
     public String authJwtIssuer() {return authJwtIssuer;}
+    /** 기대하는 JWT audience를 반환합니다. */
     public String authJwtAudience() {return authJwtAudience;}
+    /** JWT exp 검증 시 허용할 clock skew(초)를 반환합니다. */
     public long authJwtClockSkewSeconds() {return authJwtClockSkewSeconds;}
+    /** Gateway 라우팅 정의 목록을 반환합니다. */
     public List<RouteDefinition> routes() {return routes;}
 }

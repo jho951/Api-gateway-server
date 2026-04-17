@@ -1,23 +1,26 @@
 package com.gateway.server;
 
-import com.gateway.contract.InternalServiceApi;
 import com.gateway.contract.external.path.AuthApiPaths;
 import com.gateway.contract.external.path.HealthApiPaths;
 import com.gateway.contract.internal.header.ServiceHeaders;
 import com.gateway.audit.GatewayAuditService;
+import com.gateway.auth.PermissionServiceClient;
 import com.gateway.code.GatewayErrorCode;
 import com.gateway.config.GatewayConfig;
 import com.gateway.contract.internal.header.TraceHeaders;
 import com.gateway.exception.GatewayException;
 import com.gateway.exception.GatewayExceptionHandler;
+import com.gateway.exception.ResponseSpec;
 import com.gateway.http.ExchangeAdapter;
 import com.gateway.http.Jsons;
 import com.gateway.http.TrustedHeaderNames;
+import com.gateway.metrics.GatewayMetrics;
 import com.gateway.auth.AuthResult;
 import com.gateway.contract.external.header.ExternalApiHeaders;
 import com.gateway.policy.CorsPolicy;
 import com.gateway.policy.RequestWindowRateLimiter;
 import com.gateway.policy.SecurityHeadersPolicy;
+import com.gateway.cache.RedisPermissionCache;
 import com.gateway.proxy.ProxyRequest;
 import com.gateway.proxy.ProxyResponse;
 import com.gateway.proxy.ReverseProxyClient;
@@ -28,6 +31,7 @@ import com.gateway.security.AuthVerificationResult;
 import com.gateway.security.AuthSessionValidator;
 import com.gateway.security.InternalJwtIssuer;
 import com.gateway.security.RequestChannel;
+import com.gateway.security.SessionCacheKey;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
@@ -44,8 +48,11 @@ import java.util.logging.Logger;
 /** 문서 설계 기준의 정책형 API Gateway 진입 핸들러입니다. */
 public final class GatewayHandler implements HttpHandler {
     private static final Logger log = Logger.getLogger(GatewayHandler.class.getName());
+    private static final String METRICS_PATH = "/metrics";
+    private static final String ACTUATOR_PROMETHEUS_PATH = "/actuator/prometheus";
 
     private final GatewayConfig config;
+    private final GatewayMetrics metrics;
     private final RouteResolver routeResolver;
     private final ReverseProxyClient proxyClient;
     private final CorsPolicy corsPolicy;
@@ -53,6 +60,8 @@ public final class GatewayHandler implements HttpHandler {
     private final RequestWindowRateLimiter loginRateLimiter;
     private final AuthSessionValidator authSessionValidator;
     private final InternalJwtIssuer internalJwtIssuer;
+    private final PermissionServiceClient permissionServiceClient;
+    private final RedisPermissionCache permissionCache;
     private final GatewayAuditService gatewayAuditService;
 
     /**
@@ -60,7 +69,12 @@ public final class GatewayHandler implements HttpHandler {
      * @param config
      */
     public GatewayHandler(GatewayConfig config) {
+        this(config, new GatewayMetrics());
+    }
+
+    public GatewayHandler(GatewayConfig config, GatewayMetrics metrics) {
         this.config = config;
+        this.metrics = metrics;
         this.routeResolver = new RouteResolver(config.routes());
         this.proxyClient = new ReverseProxyClient(config.requestTimeout());
         this.corsPolicy = new CorsPolicy(config.allowedOrigins());
@@ -71,6 +85,16 @@ public final class GatewayHandler implements HttpHandler {
                 config.internalJwtIssuer(),
                 config.internalJwtAudience(),
                 config.internalJwtTtlSeconds()
+        );
+        this.permissionServiceClient = new PermissionServiceClient(config.requestTimeout());
+        this.permissionCache = new RedisPermissionCache(
+                config.permissionCacheEnabled(),
+                config.redisHost(),
+                config.redisPort(),
+                config.redisPassword(),
+                config.redisTimeoutMs(),
+                config.permissionCacheTtlSeconds(),
+                config.permissionCacheKeyPrefix()
         );
         this.authSessionValidator = new AuthSessionValidator(
                 config.authServiceUri(),
@@ -107,6 +131,7 @@ public final class GatewayHandler implements HttpHandler {
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         long startedAt = System.currentTimeMillis();
+        metrics.incrementInFlight();
         ExchangeAdapter adapter = new ExchangeAdapter(exchange);
         String requestId = resolveOrCreate(exchange.getRequestHeaders().getFirst(TraceHeaders.REQUEST_ID));
         String correlationId = resolveOrCreate(exchange.getRequestHeaders().getFirst(TraceHeaders.CORRELATION_ID));
@@ -132,8 +157,14 @@ public final class GatewayHandler implements HttpHandler {
             clientIp = clientAddress.getHostAddress();
 
             requestPath = normalizePath(adapter.uri().getPath());
+            if (isMetricsPath(requestPath)) {
+                adapter.sendText(200, metrics.scrape());
+                metrics.recordRequest(requestMethod, upstreamName, 200, "METRICS", elapsedMillis(startedAt));
+                return;
+            }
             if (isHealthPath(requestPath)) {
                 adapter.sendJson(200, Jsons.toJson(Map.of("status", "UP")));
+                metrics.recordRequest(requestMethod, upstreamName, 200, "HEALTH", elapsedMillis(startedAt));
                 return;
             }
 
@@ -146,9 +177,14 @@ public final class GatewayHandler implements HttpHandler {
             if (routeType == RouteType.INTERNAL && !isInternalRequestAllowed(exchange)) throw new GatewayException(GatewayErrorCode.FORBIDDEN);
             if (shouldApplyGatewayIpGuard(routeType) && !config.adminIpPolicy().allows(clientIp)) throw new GatewayException(GatewayErrorCode.FORBIDDEN);
             if (isLoginPath(requestPath) && !loginRateLimiter.allow(clientIp)) throw new GatewayException(GatewayErrorCode.TOO_MANY_REQUESTS);
+            if (requiresAuthorizationPrecheck(match.route(), requestPath)
+                    && hasBasicToken(exchange.getRequestHeaders().getFirst("Authorization"))
+                    && !loginRateLimiter.allow(clientIp)) {
+                throw new GatewayException(GatewayErrorCode.TOO_MANY_REQUESTS);
+            }
 
             if (requiresAuthorizationPrecheck(match.route(), requestPath)) {
-                AuthContext authContext = authenticateProtectedRequest(exchange, match, requestPath, requestId, correlationId);
+                AuthContext authContext = authenticateProtectedRequest(exchange, match, requestMethod, requestPath, requestId, correlationId);
                 resolvedUserId = authContext.userId();
                 resolvedUserStatus = authContext.userStatus();
                 authOutcome = authContext.authOutcome();
@@ -158,6 +194,7 @@ public final class GatewayHandler implements HttpHandler {
             enforceBodySize(exchange);
 
             Map<String, List<String>> proxiedHeaders = sanitizeInboundHeaders(exchange, match.route());
+            injectForwardedPrefix(proxiedHeaders, match.route());
             proxiedHeaders.put(TraceHeaders.REQUEST_ID, List.of(requestId));
             proxiedHeaders.put(TraceHeaders.CORRELATION_ID, List.of(correlationId));
             injectTrustedContext(proxiedHeaders, requestPath, match.route(), requestId, resolvedUserId, resolvedUserStatus, resolveRequestChannel(exchange, requestPath, match.route()));
@@ -174,12 +211,15 @@ public final class GatewayHandler implements HttpHandler {
             logOAuthRequestTraceIfEnabled(exchange, requestPath, requestId, correlationId, proxyRequest);
 
             ProxyResponse proxyResponse = proxyClient.forward(proxyRequest);
+            Map<String, List<String>> responseHeaders = rewriteResponseHeaders(match.route(), proxyResponse);
             if ("FORWARDED".equals(authOutcome)) {
                 authOutcome = "PRECHECK_BYPASSED";
             }
-            logOAuthResponseTraceIfEnabled(requestPath, requestId, correlationId, proxyRequest, proxyResponse);
+            logOAuthResponseTraceIfEnabled(requestPath, requestId, correlationId, proxyRequest,
+                    new ProxyResponse(proxyResponse.getStatusCode(), responseHeaders, proxyResponse.getBody()));
             applyResponsePolicies(exchange, requestId, correlationId);
-            adapter.sendStream(proxyResponse.getStatusCode(), proxyResponse.getHeaders(), proxyResponse.getBody());
+            adapter.sendStream(proxyResponse.getStatusCode(), responseHeaders, proxyResponse.getBody());
+            metrics.recordRequest(requestMethod, upstreamName, proxyResponse.getStatusCode(), authOutcome, elapsedMillis(startedAt));
             gatewayAuditService.logRequest(
                     requestMethod,
                     requestPath,
@@ -192,7 +232,7 @@ public final class GatewayHandler implements HttpHandler {
                     null
             );
         } catch (GatewayException ex) {
-            GatewayExceptionHandler.ResponseSpec responseSpec = GatewayExceptionHandler.handleGatewayException(ex, requestPath, requestId);
+            ResponseSpec responseSpec = GatewayExceptionHandler.handleGatewayException(ex, requestPath, requestId);
             gatewayAuditService.logRequest(
                     requestMethod,
                     requestPath,
@@ -200,13 +240,14 @@ public final class GatewayHandler implements HttpHandler {
                     clientIp,
                     resolvedUserId,
                     upstreamName,
-                    responseSpec.httpStatus(),
+                    responseSpec.getHttpStatus(),
                     authOutcome,
                     ex.getErrorCode().getCode()
             );
-            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+            metrics.recordRequest(requestMethod, upstreamName, responseSpec.getHttpStatus(), authOutcome, elapsedMillis(startedAt));
+            adapter.sendJson(responseSpec.getHttpStatus(), responseSpec.getJsonBody());
         } catch (IllegalStateException ex) {
-            GatewayExceptionHandler.ResponseSpec responseSpec =
+            ResponseSpec responseSpec =
                     GatewayExceptionHandler.fromErrorCode(GatewayErrorCode.PAYLOAD_TOO_LARGE, requestPath, requestId);
             gatewayAuditService.logRequest(
                     requestMethod,
@@ -215,14 +256,15 @@ public final class GatewayHandler implements HttpHandler {
                     clientIp,
                     resolvedUserId,
                     upstreamName,
-                    responseSpec.httpStatus(),
+                    responseSpec.getHttpStatus(),
                     authOutcome,
                     GatewayErrorCode.PAYLOAD_TOO_LARGE.getCode()
             );
-            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+            metrics.recordRequest(requestMethod, upstreamName, responseSpec.getHttpStatus(), authOutcome, elapsedMillis(startedAt));
+            adapter.sendJson(responseSpec.getHttpStatus(), responseSpec.getJsonBody());
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            GatewayExceptionHandler.ResponseSpec responseSpec =
+            ResponseSpec responseSpec =
                     GatewayExceptionHandler.fromErrorCode(GatewayErrorCode.UPSTREAM_TIMEOUT, requestPath, requestId);
             gatewayAuditService.logRequest(
                     requestMethod,
@@ -231,11 +273,12 @@ public final class GatewayHandler implements HttpHandler {
                     clientIp,
                     resolvedUserId,
                     upstreamName,
-                    responseSpec.httpStatus(),
+                    responseSpec.getHttpStatus(),
                     authOutcome,
                     GatewayErrorCode.UPSTREAM_TIMEOUT.getCode()
             );
-            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+            metrics.recordRequest(requestMethod, upstreamName, responseSpec.getHttpStatus(), authOutcome, elapsedMillis(startedAt));
+            adapter.sendJson(responseSpec.getHttpStatus(), responseSpec.getJsonBody());
         } catch (IOException ex) {
             log.log(Level.WARNING,
                     "requestId=" + requestId
@@ -244,7 +287,7 @@ public final class GatewayHandler implements HttpHandler {
                             + " path=" + requestPath
                             + " upstream=" + upstreamName,
                     ex);
-            GatewayExceptionHandler.ResponseSpec responseSpec =
+            ResponseSpec responseSpec =
                     GatewayExceptionHandler.fromErrorCode(GatewayErrorCode.UPSTREAM_FAILURE, requestPath, requestId);
             gatewayAuditService.logRequest(
                     requestMethod,
@@ -253,13 +296,14 @@ public final class GatewayHandler implements HttpHandler {
                     clientIp,
                     resolvedUserId,
                     upstreamName,
-                    responseSpec.httpStatus(),
+                    responseSpec.getHttpStatus(),
                     authOutcome,
                     GatewayErrorCode.UPSTREAM_FAILURE.getCode()
             );
-            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+            metrics.recordRequest(requestMethod, upstreamName, responseSpec.getHttpStatus(), authOutcome, elapsedMillis(startedAt));
+            adapter.sendJson(responseSpec.getHttpStatus(), responseSpec.getJsonBody());
         } catch (IllegalArgumentException ex) {
-            GatewayExceptionHandler.ResponseSpec responseSpec =
+            ResponseSpec responseSpec =
                     GatewayExceptionHandler.handleIllegalArgumentException(ex, requestPath, requestId);
             gatewayAuditService.logRequest(
                     requestMethod,
@@ -268,13 +312,14 @@ public final class GatewayHandler implements HttpHandler {
                     clientIp,
                     resolvedUserId,
                     upstreamName,
-                    responseSpec.httpStatus(),
+                    responseSpec.getHttpStatus(),
                     authOutcome,
                     GatewayErrorCode.INVALID_REQUEST.getCode()
             );
-            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+            metrics.recordRequest(requestMethod, upstreamName, responseSpec.getHttpStatus(), authOutcome, elapsedMillis(startedAt));
+            adapter.sendJson(responseSpec.getHttpStatus(), responseSpec.getJsonBody());
         } catch (java.lang.Exception ex) {
-            GatewayExceptionHandler.ResponseSpec responseSpec =
+            ResponseSpec responseSpec =
                     GatewayExceptionHandler.handleException(ex, requestPath, requestId);
             gatewayAuditService.logRequest(
                     requestMethod,
@@ -283,12 +328,14 @@ public final class GatewayHandler implements HttpHandler {
                     clientIp,
                     resolvedUserId,
                     upstreamName,
-                    responseSpec.httpStatus(),
+                    responseSpec.getHttpStatus(),
                     authOutcome,
                     GatewayErrorCode.INTERNAL_ERROR.getCode()
             );
-            adapter.sendJson(responseSpec.httpStatus(), responseSpec.jsonBody());
+            metrics.recordRequest(requestMethod, upstreamName, responseSpec.getHttpStatus(), authOutcome, elapsedMillis(startedAt));
+            adapter.sendJson(responseSpec.getHttpStatus(), responseSpec.getJsonBody());
         } finally {
+            metrics.decrementInFlight();
             adapter.close();
         }
     }
@@ -322,11 +369,19 @@ public final class GatewayHandler implements HttpHandler {
         return HealthApiPaths.HEALTH.equals(path) || HealthApiPaths.READY.equals(path);
     }
 
+    private boolean isMetricsPath(String path) {
+        return METRICS_PATH.equals(path) || ACTUATOR_PROMETHEUS_PATH.equals(path);
+    }
+
+    private long elapsedMillis(long startedAt) {
+        return Math.max(System.currentTimeMillis() - startedAt, 0);
+    }
+
     private boolean isLoginPath(String path) {
         return AuthApiPaths.LOGIN.equals(path)
                 || AuthApiPaths.SSO_START.equals(path)
                 || AuthApiPaths.SSO_START_LEGACY.equals(path)
-                || path.startsWith("/v1/auth/oauth2/authorize/")
+                || AuthApiPaths.OAUTH2_AUTHORIZE_GITHUB.equals(path)
                 || path.startsWith("/v1/oauth2/authorization/");
     }
 
@@ -367,7 +422,12 @@ public final class GatewayHandler implements HttpHandler {
                 && authorizationHeader.startsWith("Bearer ");
     }
 
-    private String resolveIncomingAuth(RequestChannel requestChannel, HttpExchange exchange) {
+    private String resolveIncomingAuth(
+            RequestChannel requestChannel,
+            HttpExchange exchange,
+            String requestId,
+            String correlationId
+    ) throws IOException, InterruptedException {
         if (requestChannel == null) {
             return null;
         }
@@ -383,7 +443,16 @@ public final class GatewayHandler implements HttpHandler {
         if (hasBearerToken(authorizationHeader)) {
             return authorizationHeader;
         }
+        if (hasBasicToken(authorizationHeader)) {
+            return authSessionValidator.exchangeBasicForBearer(authorizationHeader, requestId, correlationId);
+        }
         return null;
+    }
+
+    private boolean hasBasicToken(String authorizationHeader) {
+        return authorizationHeader != null
+                && !authorizationHeader.isBlank()
+                && authorizationHeader.regionMatches(true, 0, "Basic ", 0, "Basic ".length());
     }
 
     private static String extractToken(String authorizationHeader) {
@@ -427,12 +496,53 @@ public final class GatewayHandler implements HttpHandler {
     private Map<String, List<String>> sanitizeInboundHeaders(HttpExchange exchange, com.gateway.routing.RouteDefinition route) {
         Map<String, List<String>> sanitized = exchange.getRequestHeaders().entrySet().stream()
                 .filter(entry -> !TrustedHeaderNames.ALL.contains(entry.getKey().toLowerCase()))
+                .filter(entry -> !"x-forwarded-prefix".equalsIgnoreCase(entry.getKey()))
                 .collect(java.util.stream.Collectors.toMap(
                         Map.Entry::getKey,
                         entry -> new ArrayList<>(entry.getValue())
                 ));
         sanitized.entrySet().removeIf(entry -> "authorization".equalsIgnoreCase(entry.getKey()));
         return sanitized;
+    }
+
+    private void injectForwardedPrefix(Map<String, List<String>> proxiedHeaders, com.gateway.routing.RouteDefinition route) {
+        if (route.stripPrefix() == null || route.stripPrefix().isBlank()) {
+            return;
+        }
+        proxiedHeaders.put("X-Forwarded-Prefix", List.of(route.stripPrefix()));
+    }
+
+    private Map<String, List<String>> rewriteResponseHeaders(
+            com.gateway.routing.RouteDefinition route,
+            ProxyResponse proxyResponse
+    ) {
+        Map<String, List<String>> headers = new java.util.LinkedHashMap<>();
+        proxyResponse.getHeaders().forEach((key, values) -> {
+            if ("location".equalsIgnoreCase(key)) {
+                headers.put(key, values.stream()
+                        .map(value -> rewriteLocation(route, value))
+                        .toList());
+            } else {
+                headers.put(key, values);
+            }
+        });
+        return headers;
+    }
+
+    private String rewriteLocation(com.gateway.routing.RouteDefinition route, String location) {
+        if (location == null || location.isBlank()) {
+            return location;
+        }
+        if (route.stripPrefix() == null || route.stripPrefix().isBlank()) {
+            return location;
+        }
+        if (location.startsWith(route.stripPrefix() + "/")) {
+            return location;
+        }
+        if (location.startsWith("/oauth2/") || location.startsWith("/login/oauth2/") || location.startsWith("/.well-known/")) {
+            return route.stripPrefix() + location;
+        }
+        return location;
     }
 
     private void injectTrustedContext(
@@ -447,12 +557,12 @@ public final class GatewayHandler implements HttpHandler {
         if (resolvedUserId == null || resolvedUserId.isBlank()) {
             return;
         }
-        proxiedHeaders.put(InternalServiceApi.Headers.USER_ID, List.of(resolvedUserId));
+        proxiedHeaders.put(ServiceHeaders.Trusted.USER_ID, List.of(resolvedUserId));
         if (resolvedUserStatus != null && !resolvedUserStatus.isBlank()) {
-            proxiedHeaders.put(InternalServiceApi.Headers.USER_STATUS, List.of(resolvedUserStatus));
+            proxiedHeaders.put(ServiceHeaders.Trusted.USER_STATUS, List.of(resolvedUserStatus));
         }
         if (requestChannel != null) {
-            proxiedHeaders.put(InternalServiceApi.Headers.CLIENT_TYPE, List.of(requestChannel.headerValue()));
+            proxiedHeaders.put(ServiceHeaders.Trusted.CLIENT_TYPE, List.of(requestChannel.headerValue()));
         }
         if (route.routeType() == RouteType.PROTECTED || route.routeType() == RouteType.ADMIN) {
             log.info("trusted_context_injected"
@@ -462,9 +572,9 @@ public final class GatewayHandler implements HttpHandler {
                     + " channel=" + (requestChannel == null ? "unknown" : requestChannel.headerValue())
                     + " userId=" + resolvedUserId
                     + " userStatus=" + resolveUserStatus(resolvedUserStatus)
-                    + " headers=[" + InternalServiceApi.Headers.USER_ID + ", "
-                    + InternalServiceApi.Headers.USER_STATUS + ", "
-                    + InternalServiceApi.Headers.CLIENT_TYPE + "]");
+                    + " headers=[" + ServiceHeaders.Trusted.USER_ID + ", "
+                    + ServiceHeaders.Trusted.USER_STATUS + ", "
+                    + ServiceHeaders.Trusted.CLIENT_TYPE + "]");
         }
     }
 
@@ -558,6 +668,9 @@ public final class GatewayHandler implements HttpHandler {
         }
         if (requestPath.startsWith("/v1/documents/")
                 || requestPath.equals("/v1/documents")
+                || requestPath.startsWith("/v1/workspaces/")
+                || requestPath.equals("/v1/workspaces")
+                || requestPath.startsWith("/v1/editor-operations/")
                 || requestPath.startsWith("/v1/admin/")
                 || requestPath.startsWith("/v1/users/me")) {
             return RequestChannel.WEB;
@@ -575,14 +688,18 @@ public final class GatewayHandler implements HttpHandler {
     private AuthContext authenticateProtectedRequest(
             HttpExchange exchange,
             RouteMatch match,
+            String requestMethod,
             String requestPath,
             String requestId,
             String correlationId
     ) throws IOException, InterruptedException {
         RequestChannel requestChannel = resolveRequestChannel(exchange, requestPath, match.route());
-        String authForVerification = resolveIncomingAuth(requestChannel, exchange);
+        String authForVerification = resolveIncomingAuth(requestChannel, exchange, requestId, correlationId);
         if (authForVerification == null || authForVerification.isBlank()) {
-            return authenticateMissingCredentials(exchange, requestChannel, requestId, correlationId);
+            if (!requestChannel.isWeb() && hasBasicToken(exchange.getRequestHeaders().getFirst("Authorization"))) {
+                throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
+            }
+            return authenticateMissingCredentials(exchange, match, requestChannel, requestMethod, requestPath, requestId, correlationId);
         }
 
         AuthVerificationResult verificationResult = authSessionValidator.verifyBearer(authForVerification, requestId, correlationId);
@@ -591,23 +708,90 @@ public final class GatewayHandler implements HttpHandler {
             throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
         }
 
+        if (match.route().routeType() == RouteType.ADMIN) {
+            authorizeAdminRoute(requestMethod, requestPath, requestId, correlationId, authResult);
+        }
+
         String userStatus = resolveUserStatus(authResult.getStatus());
         if (userStatus == null || userStatus.isBlank()) {
             userStatus = "A";
         }
-        return new AuthContext(authResult.getUserId(), userStatus, verificationResult.outcome());
+        return new AuthContext(authResult.getUserId(), userStatus, verificationResult.outcome(), authResult);
+    }
+
+    private void authorizeAdminRoute(
+            String requestMethod,
+            String requestPath,
+            String requestId,
+            String correlationId,
+            AuthResult authResult
+    ) throws IOException, InterruptedException {
+        if (!config.adminPermissionCheckEnabled() || config.adminPermissionVerifyUri() == null) {
+            throw new GatewayException(GatewayErrorCode.FORBIDDEN);
+        }
+
+        String cacheKey = buildAdminPermissionCacheKey(requestMethod, requestPath, authResult);
+        Boolean cached = permissionCache.get(cacheKey);
+        if (cached != null) {
+            if (!cached) {
+                throw new GatewayException(GatewayErrorCode.FORBIDDEN);
+            }
+            return;
+        }
+
+        boolean allowed;
+        try {
+            allowed = permissionServiceClient.verifyAdminAccess(
+                    config.adminPermissionVerifyUri(),
+                    requestMethod,
+                    requestPath,
+                    requestId,
+                    correlationId,
+                    authResult,
+                    config.internalRequestSecret()
+            );
+        } catch (IOException | InterruptedException ex) {
+            if (ex instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new GatewayException(GatewayErrorCode.FORBIDDEN);
+        }
+
+        permissionCache.put(cacheKey, allowed);
+        if (!allowed) {
+            throw new GatewayException(GatewayErrorCode.FORBIDDEN);
+        }
+    }
+
+    private String buildAdminPermissionCacheKey(String requestMethod, String requestPath, AuthResult authResult) {
+        String rawKey = String.join(
+                "|",
+                safeCachePart(authResult.getUserId()),
+                safeCachePart(authResult.getRole()),
+                safeCachePart(requestMethod),
+                safeCachePart(requestPath)
+        );
+        return SessionCacheKey.fromToken(rawKey);
+    }
+
+    private String safeCachePart(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private AuthContext authenticateMissingCredentials(
             HttpExchange exchange,
+            RouteMatch match,
             RequestChannel requestChannel,
+            String requestMethod,
+            String requestPath,
             String requestId,
             String correlationId
     ) throws IOException, InterruptedException {
         if (requestChannel.isWeb()) {
             String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
             if (cookieHeader == null || cookieHeader.isBlank() || !cookieHeader.contains("sso_session=")) {
-                if (hasBearerToken(exchange.getRequestHeaders().getFirst("Authorization"))) {
+                String authorizationHeader = exchange.getRequestHeaders().getFirst("Authorization");
+                if (hasBearerToken(authorizationHeader) || hasBasicToken(authorizationHeader)) {
                     throw new GatewayException(GatewayErrorCode.AUTH_CHANNEL_MISMATCH);
                 }
                 throw new GatewayException(GatewayErrorCode.MISSING_AUTH_CREDENTIALS);
@@ -621,11 +805,14 @@ public final class GatewayHandler implements HttpHandler {
             if (!sessionVerificationResult.verified() || sessionAuthResult == null || !hasUserId(sessionAuthResult)) {
                 throw new GatewayException(GatewayErrorCode.UNAUTHORIZED);
             }
+            if (match.route().routeType() == RouteType.ADMIN) {
+                authorizeAdminRoute(requestMethod, requestPath, requestId, correlationId, sessionAuthResult);
+            }
             String userStatus = resolveUserStatus(sessionAuthResult.getStatus());
             if (userStatus == null || userStatus.isBlank()) {
                 userStatus = "A";
             }
-            return new AuthContext(sessionAuthResult.getUserId(), userStatus, sessionVerificationResult.outcome());
+            return new AuthContext(sessionAuthResult.getUserId(), userStatus, sessionVerificationResult.outcome(), sessionAuthResult);
         }
 
         if (hasCookieBasedAuth(exchange.getRequestHeaders().getFirst("Cookie"))) {
@@ -742,6 +929,6 @@ public final class GatewayHandler implements HttpHandler {
                 .orElse(List.of());
     }
 
-    private record AuthContext(String userId, String userStatus, String authOutcome) {
+    private record AuthContext(String userId, String userStatus, String authOutcome, AuthResult authResult) {
     }
 }

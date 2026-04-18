@@ -42,10 +42,11 @@ application {
 }
 
 dependencies {
-    implementation platform("io.github.jho951.platform:platform-governance-bom:1.0.0")
-    implementation platform("io.github.jho951.platform:platform-security-bom:1.0.3")
-    implementation "io.github.jho951.platform:platform-governance-spring-boot-starter"
-    implementation "io.github.jho951.platform:platform-security-starter"
+    implementation platform("io.github.jho951.platform:platform-governance-bom:2.0.0")
+    implementation platform("io.github.jho951.platform:platform-security-bom:2.0.0")
+    implementation "io.github.jho951.platform:platform-governance-api"
+    implementation "io.github.jho951.platform:platform-security-api"
+    implementation "io.github.jho951.platform:platform-security-ip"
 
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'

@@ -1,0 +1,368 @@
+package com.gateway.spring;
+
+import com.gateway.audit.GatewayFileAuditLogRecorder;
+import com.gateway.audit.GatewayAuditService;
+import com.gateway.audit.GatewayOperationalAuditPort;
+import com.gateway.auth.AuthServiceClient;
+import com.gateway.auth.AuthzServiceClient;
+import com.gateway.cache.LocalSessionCache;
+import com.gateway.cache.RedisAuthzCache;
+import com.gateway.cache.RedisSessionCache;
+import com.gateway.config.GatewayConfig;
+import com.gateway.contract.external.path.AuthApiPaths;
+import com.gateway.policy.RequestWindowRateLimiter;
+import com.gateway.security.AuthSessionValidator;
+import com.gateway.security.AuthTokenVerifier;
+import com.gateway.security.InternalJwtIssuer;
+import com.gateway.security.JwtPrecheckPolicy;
+import io.github.jho951.platform.governance.api.AuditLogRecorder;
+import io.github.jho951.platform.security.api.SecurityAuditMode;
+import io.github.jho951.platform.security.api.SecurityAuditPublisher;
+import io.github.jho951.platform.security.api.SecurityContext;
+import io.github.jho951.platform.security.api.SecurityPolicy;
+import io.github.jho951.platform.security.api.SecurityPolicyService;
+import io.github.jho951.platform.security.api.SecurityRequest;
+import io.github.jho951.platform.security.api.SecurityVerdict;
+import io.github.jho951.platform.security.core.DefaultSecurityPolicyService;
+import io.github.jho951.platform.security.governance.GovernanceSecurityAuditPublisher;
+import io.github.jho951.platform.security.policy.AuthMode;
+import io.github.jho951.platform.security.policy.AuthenticationModeResolver;
+import io.github.jho951.platform.security.policy.BoundaryIpPolicyProvider;
+import io.github.jho951.platform.security.policy.BoundaryRateLimitPolicyProvider;
+import io.github.jho951.platform.security.policy.ClientType;
+import io.github.jho951.platform.security.policy.ClientTypeResolver;
+import io.github.jho951.platform.security.policy.DefaultAuthenticationModeResolver;
+import io.github.jho951.platform.security.policy.DefaultClientTypeResolver;
+import io.github.jho951.platform.security.policy.DefaultPlatformPrincipalFactory;
+import io.github.jho951.platform.security.policy.PlatformPrincipalFactory;
+import io.github.jho951.platform.security.policy.PlatformSecurityProperties;
+import io.github.jho951.platform.security.policy.SecurityBoundary;
+import io.github.jho951.platform.security.policy.SecurityBoundaryResolver;
+import io.github.jho951.platform.security.policy.SecurityBoundaryType;
+import io.github.jho951.platform.security.web.ReactiveSecurityFailureResponseWriter;
+import io.github.jho951.platform.security.web.SecurityIngressAdapter;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Locale;
+
+@Configuration
+public class GatewayPlatformSecurityConfiguration {
+    public static final String ATTR_BOUNDARY = "gateway.security.boundary";
+    public static final String ATTR_CLIENT_TYPE = "gateway.security.clientType";
+    public static final String ATTR_AUTH_MODE = "gateway.security.authMode";
+    public static final String ATTR_REQUEST_ID = "gateway.security.requestId";
+    public static final String ATTR_CORRELATION_ID = "gateway.security.correlationId";
+    public static final String ATTR_ORIGINAL_METHOD = "gateway.security.originalMethod";
+    public static final String ATTR_ORIGINAL_PATH = "gateway.security.originalPath";
+    public static final String ATTR_USER_STATUS = "gateway.security.userStatus";
+
+    @Bean
+    public PlatformSecurityProperties platformSecurityProperties() {
+        PlatformSecurityProperties properties = new PlatformSecurityProperties();
+        properties.setEnabled(true);
+        properties.getAuth().setEnabled(true);
+        properties.getAuth().setDefaultMode(AuthMode.HYBRID);
+        properties.getAuth().setAllowSessionForBrowser(true);
+        properties.getAuth().setAllowBearerForApi(true);
+        properties.getAuth().setInternalTokenEnabled(true);
+        properties.getAudit().setMode(SecurityAuditMode.ALL);
+        return properties;
+    }
+
+    @Bean
+    public SecurityBoundaryResolver gatewaySecurityBoundaryResolver() {
+        return request -> new SecurityBoundary(resolveBoundaryType(request), List.of(request.path()));
+    }
+
+    @Bean
+    public ClientTypeResolver gatewayClientTypeResolver() {
+        DefaultClientTypeResolver fallback = new DefaultClientTypeResolver();
+        return new ClientTypeResolver() {
+            @Override
+            public ClientType resolve(SecurityRequest request) {
+                return resolve(request, null, null);
+            }
+
+            @Override
+            public ClientType resolve(SecurityRequest request, SecurityContext context, SecurityBoundary boundary) {
+                String raw = normalize(request.attributes().get(ATTR_CLIENT_TYPE));
+                if (raw != null) {
+                    try {
+                        return ClientType.valueOf(raw);
+                    } catch (IllegalArgumentException ignored) {
+                        // fall through
+                    }
+                }
+                return fallback.resolve(request, context, boundary);
+            }
+        };
+    }
+
+    @Bean
+    public AuthenticationModeResolver gatewayAuthenticationModeResolver(PlatformSecurityProperties properties) {
+        DefaultAuthenticationModeResolver fallback = new DefaultAuthenticationModeResolver(properties.getAuth());
+        return new AuthenticationModeResolver() {
+            @Override
+            public AuthMode resolve(SecurityRequest request, SecurityContext context) {
+                return resolve(request, context, null, null);
+            }
+
+            @Override
+            public AuthMode resolve(SecurityRequest request, SecurityContext context, SecurityBoundary boundary, ClientType clientType) {
+                String raw = normalize(request.attributes().get(ATTR_AUTH_MODE));
+                if (raw != null) {
+                    try {
+                        return AuthMode.valueOf(raw);
+                    } catch (IllegalArgumentException ignored) {
+                        // fall through
+                    }
+                }
+                return fallback.resolve(request, context, boundary, clientType);
+            }
+        };
+    }
+
+    @Bean
+    public PlatformPrincipalFactory platformPrincipalFactory() {
+        return new DefaultPlatformPrincipalFactory();
+    }
+
+    @Bean
+    public AuthSessionValidator gatewayAuthSessionValidator(GatewayConfig config) {
+        return new AuthSessionValidator(
+                config.authServiceUri(),
+                new JwtPrecheckPolicy(
+                        config.jwtPrecheckExpEnabled(),
+                        config.jwtPrecheckExpClockSkewSeconds(),
+                        config.jwtPrecheckMaxTokenLength()
+                ),
+                new AuthTokenVerifier(
+                        config.authJwtVerifyEnabled(),
+                        config.authJwtPublicKeyPem(),
+                        config.authJwtSharedSecret(),
+                        config.authJwtKeyId(),
+                        config.authJwtAlgorithm(),
+                        config.authJwtIssuer(),
+                        config.authJwtAudience(),
+                        config.authJwtClockSkewSeconds()
+                ),
+                new AuthServiceClient(config.requestTimeout()),
+                new LocalSessionCache(config.sessionCacheEnabled() ? config.sessionLocalCacheTtlSeconds() : 0),
+                new RedisSessionCache(
+                        config.sessionCacheEnabled(),
+                        config.redisHost(),
+                        config.redisPort(),
+                        config.redisPassword(),
+                        config.redisTimeoutMs(),
+                        config.sessionCacheTtlSeconds(),
+                        config.sessionCacheKeyPrefix()
+                )
+        );
+    }
+
+    @Bean
+    public InternalJwtIssuer gatewayAuthzInternalJwtIssuer(GatewayConfig config) {
+        return new InternalJwtIssuer(
+                config.authzInternalJwtSharedSecret(),
+                config.authzInternalJwtIssuer(),
+                config.authzInternalJwtAudience(),
+                config.authzInternalJwtTtlSeconds()
+        );
+    }
+
+    @Bean
+    public AuthzServiceClient gatewayAuthzServiceClient(
+            GatewayConfig config,
+            InternalJwtIssuer gatewayAuthzInternalJwtIssuer
+    ) {
+        return new AuthzServiceClient(config.requestTimeout(), gatewayAuthzInternalJwtIssuer);
+    }
+
+    @Bean
+    public RedisAuthzCache gatewayAuthzCache(GatewayConfig config) {
+        return new RedisAuthzCache(
+                config.authzCacheEnabled(),
+                config.redisHost(),
+                config.redisPort(),
+                config.redisPassword(),
+                config.redisTimeoutMs(),
+                config.authzCacheTtlSeconds(),
+                config.authzCacheKeyPrefix()
+        );
+    }
+
+    @Bean
+    public BoundaryIpPolicyProvider gatewayBoundaryIpPolicyProvider(GatewayConfig config) {
+        return boundary -> switch (boundary.type()) {
+            case ADMIN -> ipPolicy("ip-guard", config.adminIpPolicy(), "admin ip denied");
+            case INTERNAL -> ipPolicy("ip-guard", config.internalIpPolicy(), "internal ip denied");
+            default -> allowPolicy("gateway-ip", "gateway-managed-ip-policy");
+        };
+    }
+
+    @Bean
+    public BoundaryRateLimitPolicyProvider gatewayBoundaryRateLimitPolicyProvider(GatewayConfig config) {
+        RequestWindowRateLimiter loginRateLimiter = new RequestWindowRateLimiter(config.loginRateLimitPerMinute(), 60_000);
+        return boundary -> switch (boundary.type()) {
+            case PUBLIC -> loginRateLimitPolicy(loginRateLimiter);
+            default -> allowPolicy("gateway-rate-limit", "gateway-managed-rate-limit");
+        };
+    }
+
+    @Bean
+    public SecurityPolicyService gatewaySecurityPolicyService(
+            GatewayConfig config,
+            SecurityBoundaryResolver boundaryResolver,
+            ClientTypeResolver clientTypeResolver,
+            AuthenticationModeResolver authenticationModeResolver,
+            BoundaryIpPolicyProvider boundaryIpPolicyProvider,
+            BoundaryRateLimitPolicyProvider boundaryRateLimitPolicyProvider,
+            PlatformPrincipalFactory principalFactory,
+            AuthzServiceClient gatewayAuthzServiceClient,
+            RedisAuthzCache gatewayAuthzCache
+    ) {
+        SecurityPolicyService delegate = new DefaultSecurityPolicyService(
+                boundaryResolver,
+                clientTypeResolver,
+                authenticationModeResolver,
+                boundaryIpPolicyProvider,
+                boundaryRateLimitPolicyProvider,
+                principalFactory
+        );
+        return new GatewayPlatformSecurityPolicyService(
+                delegate,
+                config,
+                gatewayAuthzServiceClient,
+                gatewayAuthzCache
+        );
+    }
+
+    @Bean
+    public SecurityIngressAdapter gatewaySecurityIngressAdapter(
+            SecurityPolicyService securityPolicyService,
+            SecurityBoundaryResolver boundaryResolver
+    ) {
+        return new SecurityIngressAdapter(securityPolicyService, boundaryResolver);
+    }
+
+    @Bean("gatewayPlatformExternalAuditLogRecorder")
+    public AuditLogRecorder gatewayPlatformExternalAuditLogRecorder(GatewayConfig config) {
+        return new GatewayFileAuditLogRecorder(
+                Path.of(config.auditLogPath()),
+                config.auditLogServiceName(),
+                config.auditLogEnv()
+        );
+    }
+
+    @Bean
+    public SecurityAuditPublisher gatewaySecurityAuditPublisher(
+            PlatformSecurityProperties properties,
+            @Qualifier("gatewayPlatformExternalAuditLogRecorder") AuditLogRecorder externalRecorder,
+            @Qualifier("platformGovernanceAuditLogRecorder") ObjectProvider<AuditLogRecorder> governanceRecorderProvider
+    ) {
+        AuditLogRecorder recorder = governanceRecorderProvider.getIfAvailable(() -> externalRecorder);
+        return new GovernanceSecurityAuditPublisher(recorder, properties.getAudit().getMode());
+    }
+
+    @Bean
+    public GatewayOperationalAuditPort gatewayOperationalAuditPort(
+            GatewayConfig config,
+            @Qualifier("gatewayPlatformExternalAuditLogRecorder") AuditLogRecorder externalRecorder,
+            @Qualifier("platformGovernanceAuditLogRecorder") ObjectProvider<AuditLogRecorder> governanceRecorderProvider
+    ) {
+        AuditLogRecorder recorder = governanceRecorderProvider.getIfAvailable(() -> externalRecorder);
+        return new GatewayAuditService(config.auditLogEnabled(), recorder);
+    }
+
+    @Bean
+    public ReactiveSecurityFailureResponseWriter gatewaySecurityFailureResponseWriter(
+            GatewayFailureResponseFactory gatewayFailureResponseFactory,
+            GatewayResponseContractWriter gatewayResponseContractWriter
+    ) {
+        return new GatewayPlatformFailureResponseWriter(gatewayFailureResponseFactory, gatewayResponseContractWriter);
+    }
+
+    private static SecurityPolicy allowPolicy(String name, String reason) {
+        return new SecurityPolicy() {
+            @Override
+            public String name() {
+                return name;
+            }
+
+            @Override
+            public SecurityVerdict evaluate(SecurityRequest request, SecurityContext context) {
+                return SecurityVerdict.allow(name, reason);
+            }
+        };
+    }
+
+    private static SecurityPolicy ipPolicy(String name, com.gateway.security.IpGuardPolicy policy, String denyReason) {
+        return new SecurityPolicy() {
+            @Override
+            public String name() {
+                return name;
+            }
+
+            @Override
+            public SecurityVerdict evaluate(SecurityRequest request, SecurityContext context) {
+                if (policy.allows(request.clientIp())) {
+                    return SecurityVerdict.allow(name, "ip allowed");
+                }
+                return SecurityVerdict.deny(name, denyReason);
+            }
+        };
+    }
+
+    private static SecurityPolicy loginRateLimitPolicy(RequestWindowRateLimiter loginRateLimiter) {
+        return new SecurityPolicy() {
+            @Override
+            public String name() {
+                return "rate-limiter";
+            }
+
+            @Override
+            public SecurityVerdict evaluate(SecurityRequest request, SecurityContext context) {
+                if (!isLoginPath(request.path())) {
+                    return SecurityVerdict.allow(name(), "rate limit bypassed");
+                }
+                if (loginRateLimiter.allow(request.clientIp())) {
+                    return SecurityVerdict.allow(name(), "login rate limit allowed");
+                }
+                return SecurityVerdict.deny(name(), "login rate limit exceeded");
+            }
+        };
+    }
+
+    private static SecurityBoundaryType resolveBoundaryType(SecurityRequest request) {
+        String raw = normalize(request.attributes().get(ATTR_BOUNDARY));
+        if (raw == null) {
+            return SecurityBoundaryType.PUBLIC;
+        }
+        return switch (raw) {
+            case "INTERNAL" -> SecurityBoundaryType.INTERNAL;
+            case "ADMIN" -> SecurityBoundaryType.ADMIN;
+            case "PROTECTED" -> SecurityBoundaryType.PROTECTED;
+            default -> SecurityBoundaryType.PUBLIC;
+        };
+    }
+
+    private static String normalize(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return raw.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static boolean isLoginPath(String path) {
+        return AuthApiPaths.LOGIN.equals(path)
+                || AuthApiPaths.SSO_START.equals(path)
+                || AuthApiPaths.SSO_START_LEGACY.equals(path)
+                || AuthApiPaths.OAUTH2_AUTHORIZE_GITHUB.equals(path)
+                || path.startsWith("/v1/oauth2/authorization/");
+    }
+}

@@ -25,14 +25,16 @@ concurrency:
 env:
   CONTRACT_REPO: https://github.com/jho951/service-contract
   SERVICE_NAME: gateway-service
+  APP_MODULE: app
   CI_PROFILE: spring-boot
   CI_RUNTIME: java
   JAVA_VERSION: "17"
   TEST_COMMAND: ./gradlew --no-daemon clean test
-  BUILD_COMMAND: ./gradlew --no-daemon installDist -x test
+  BUILD_COMMAND: ./gradlew --no-daemon :${APP_MODULE}:bootJar -x test
   COMPOSE_CONFIG_COMMAND: |
-    SERVICE_SHARED_NETWORK=ci-service-shared docker compose -f docker/dev/compose.yml config >/tmp/gateway-dev.yml
-    SERVICE_SHARED_NETWORK=ci-service-shared GATEWAY_INTERNAL_REQUEST_SECRET=ci-secret AUTH_SERVICE_URL=http://auth-service:8081 USER_SERVICE_URL=http://user-service:8082 BLOCK_SERVICE_URL=http://documents-service:8083 PERMISSION_SERVICE_URL=http://permission-service:8084 REDIS_HOST=central-redis docker compose -f docker/prod/compose.yml config >/tmp/gateway-prod.yml
+    touch "$RUNNER_TEMP/gateway-empty.env"
+    SERVICE_SHARED_NETWORK=ci-service-shared GATEWAY_ENV_FILE="$RUNNER_TEMP/gateway-empty.env" docker compose -f docker/compose.yml -f docker/dev/compose.yml config >/tmp/gateway-dev.yml
+    SERVICE_SHARED_NETWORK=ci-service-shared GATEWAY_ENV_FILE="$RUNNER_TEMP/gateway-empty.env" GATEWAY_IMAGE=ghcr.io/example/gateway-service:test GATEWAY_INTERNAL_REQUEST_SECRET=ci-secret AUTH_SERVICE_URL=http://auth-service:8081 USER_SERVICE_URL=http://user-service:8082 BLOCK_SERVICE_URL=http://documents-service:8083 AUTHZ_SERVICE_URL=http://authz-service:8084 AUTHZ_ADMIN_VERIFY_URL=http://authz-service:8084/permissions/internal/admin/verify REDIS_HOST=central-redis docker compose -f docker/compose.yml -f docker/prod/compose.yml config >/tmp/gateway-prod.yml
   IMAGE_URI: ghcr.io/${{ github.repository }}
   CI_IMAGE_BUILD_COMMAND: |
     DOCKER_BUILDKIT=1 docker build \

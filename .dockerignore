@@ -1,0 +1,10 @@
+.git
+.github
+.gradle
+.idea
+build
+app/build
+common/build
+logs
+infra
+**/.DS_Store

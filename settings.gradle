@@ -1,1 +1,25 @@
+dependencyResolutionManagement {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+
+        ['platform-governance', 'platform-security', 'platform-integrations'].each { repoName ->
+            maven {
+                url = uri("https://maven.pkg.github.com/jho951/${repoName}")
+                def githubPackagesUsername = providers.environmentVariable('GITHUB_ACTOR')
+                        .orElse('jho951')
+                def githubPackagesToken = providers.environmentVariable('GH_TOKEN')
+                if (githubPackagesUsername.present && githubPackagesToken.present) {
+                    credentials {
+                        username = githubPackagesUsername.get()
+                        password = githubPackagesToken.get()
+                    }
+                }
+            }
+        }
+    }
+}
+
 rootProject.name = 'gateway-service'
+include 'app'
+include 'common'

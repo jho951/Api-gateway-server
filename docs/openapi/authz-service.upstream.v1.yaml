@@ -1,0 +1,101 @@
+openapi: 3.0.3
+info:
+  title: Authz Service Upstream API
+  version: 1.0.0
+  description: Gateway가 관리자 경로 인가를 위해 내부로 호출하는 authz-service upstream API입니다.
+servers:
+  - url: http://authz-service:8084
+paths:
+  /permissions/internal/admin/verify:
+    post:
+      summary: Verify admin access
+      description: Gateway가 인증된 사용자 context와 원본 요청 정보를 전달하면 authz-service가 관리자 경로 접근 허용 여부를 판정합니다.
+      operationId: verifyAdminAccess
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/OriginalMethod'
+        - $ref: '#/components/parameters/OriginalPath'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/CorrelationId'
+        - $ref: '#/components/parameters/InternalRequestSecret'
+      responses:
+        '200':
+          description: Access allowed
+        '400':
+          description: Missing or invalid request context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  parameters:
+    UserId:
+      name: X-User-Id
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Gateway가 인증 후 주입한 사용자 ID입니다.
+    SessionId:
+      name: X-Session-Id
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Gateway가 auth-service 검증 결과에서 얻은 세션 ID입니다.
+    OriginalMethod:
+      name: X-Original-Method
+      in: header
+      required: true
+      schema:
+        type: string
+        example: GET
+      description: client가 Gateway에 보낸 원본 HTTP method입니다.
+    OriginalPath:
+      name: X-Original-Path
+      in: header
+      required: true
+      schema:
+        type: string
+        example: /v1/admin/documents
+      description: client가 Gateway에 보낸 원본 path입니다.
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: 단일 요청 추적 ID입니다.
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema:
+        type: string
+      description: 서비스 간 추적 ID입니다.
+    InternalRequestSecret:
+      name: X-Internal-Request-Secret
+      in: header
+      required: false
+      schema:
+        type: string
+      description: Gateway와 authz-service가 공유하는 내부 호출 secret입니다.
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        path:
+          type: string
+        requestId:
+          type: string

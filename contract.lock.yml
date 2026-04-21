@@ -36,7 +36,7 @@ ci:
   java_version: "17"
   setup: gradle
   test_command: ./gradlew --no-daemon clean test
-  build_command: ./gradlew --no-daemon installDist -x test
+  build_command: ./gradlew --no-daemon :app:bootJar -x test
   docker: true
   contract_check: true
 

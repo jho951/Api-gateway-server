@@ -1,0 +1,12 @@
+name: gateway-service
+
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:-ghcr.io/jho951/gateway-service:latest}
+    networks:
+      - service-shared
+
+networks:
+  service-shared:
+    external: true
+    name: ${SERVICE_SHARED_NETWORK:-${BACKEND_SHARED_NETWORK:-${MSA_SHARED_NETWORK:-service-backbone-shared}}}

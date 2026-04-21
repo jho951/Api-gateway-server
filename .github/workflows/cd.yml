@@ -30,6 +30,7 @@ concurrency:
 env:
   CONTRACT_REPO: https://github.com/jho951/service-contract
   SERVICE_NAME: gateway-service
+  APP_MODULE: app
   CD_PROFILE: ec2-compose
   IMAGE_URI: ghcr.io/${{ github.repository }}
   IMAGE_BUILD_COMMAND: |
@@ -45,8 +46,9 @@ env:
       docker push "${IMAGE_URI}:latest"
     fi
   COMPOSE_CONFIG_COMMAND: |
-    SERVICE_SHARED_NETWORK=ci-service-shared docker compose -f docker/dev/compose.yml config >/tmp/gateway-dev.yml
-    SERVICE_SHARED_NETWORK=ci-service-shared GATEWAY_INTERNAL_REQUEST_SECRET=ci-secret AUTH_SERVICE_URL=http://auth-service:8081 USER_SERVICE_URL=http://user-service:8082 BLOCK_SERVICE_URL=http://documents-service:8083 PERMISSION_SERVICE_URL=http://permission-service:8084 REDIS_HOST=central-redis docker compose -f docker/prod/compose.yml config >/tmp/gateway-prod.yml
+    touch "$RUNNER_TEMP/gateway-empty.env"
+    SERVICE_SHARED_NETWORK=ci-service-shared GATEWAY_ENV_FILE="$RUNNER_TEMP/gateway-empty.env" docker compose -f docker/compose.yml -f docker/dev/compose.yml config >/tmp/gateway-dev.yml
+    SERVICE_SHARED_NETWORK=ci-service-shared GATEWAY_ENV_FILE="$RUNNER_TEMP/gateway-empty.env" GATEWAY_IMAGE=ghcr.io/example/gateway-service:test GATEWAY_INTERNAL_REQUEST_SECRET=ci-secret AUTH_SERVICE_URL=http://auth-service:8081 USER_SERVICE_URL=http://user-service:8082 BLOCK_SERVICE_URL=http://documents-service:8083 AUTHZ_SERVICE_URL=http://authz-service:8084 AUTHZ_ADMIN_VERIFY_URL=http://authz-service:8084/permissions/internal/admin/verify REDIS_HOST=central-redis docker compose -f docker/compose.yml -f docker/prod/compose.yml config >/tmp/gateway-prod.yml
   HEALTH_URL: http://127.0.0.1:8080/health
   READY_URL: http://127.0.0.1:8080/ready
   GITHUB_ACTOR: ${{ github.actor }}
@@ -128,6 +130,9 @@ jobs:
       - deploy-gate
       - image
     environment: ${{ needs.deploy-gate.outputs.deploy_environment }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ needs.deploy-gate.outputs.deploy_environment }}
+      IMAGE_REF: ghcr.io/${{ github.repository }}:${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -141,9 +146,10 @@ jobs:
         run: |
           set -euo pipefail
           echo "Service: ${SERVICE_NAME}"
+          echo "App module: ${APP_MODULE}"
           echo "Profile: ${CD_PROFILE}"
-          echo "Environment: ${{ needs.deploy-gate.outputs.deploy_environment }}"
-          echo "Image: ${IMAGE_URI}:${{ github.sha }}"
+          echo "Environment: ${DEPLOY_ENVIRONMENT}"
+          echo "Image: ${IMAGE_REF}"
           if [ -n "${DEPLOY_COMMAND}" ]; then
             eval "${DEPLOY_COMMAND}"
           else

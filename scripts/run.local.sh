@@ -21,4 +21,4 @@ fi
 
 export GATEWAY_INTERNAL_REQUEST_SECRET="${GATEWAY_INTERNAL_REQUEST_SECRET:-local-authz-internal-secret}"
 
-APP_ENV="$PROFILE" APP_ENV_FILE="$ENV_FILE" ./gradlew run --args="--profile=$PROFILE --env-file=$ENV_FILE"
+APP_ENV="$PROFILE" APP_ENV_FILE="$ENV_FILE" ./gradlew :app:bootRun --args="--profile=$PROFILE --env-file=$ENV_FILE"

@@ -1,77 +1,27 @@
 plugins {
-    id 'java'
-    id 'application'
+    id 'base'
+    id 'org.springframework.boot' version '3.4.10' apply false
+    id 'io.spring.dependency-management' version '1.1.7' apply false
 }
 
 group = providers.gradleProperty('project_group').get()
 version = providers.gradleProperty('project_version').get()
 
-repositories {
-    mavenLocal()
-    mavenCentral()
+allprojects {
+    group = rootProject.group
+    version = rootProject.version
+}
 
-    def githubPackagesUsername = providers.gradleProperty('githubPackagesUsername')
-            .orElse(providers.gradleProperty('githubUsername'))
-            .orElse(providers.environmentVariable('GITHUB_ACTOR'))
-            .orElse('jho951')
-    def githubPackagesToken = providers.gradleProperty('githubPackagesToken')
-            .orElse(providers.gradleProperty('githubToken'))
-            .orElse(providers.gradleProperty('ghToken'))
-            .orElse(providers.gradleProperty('gh_token'))
-            .orElse(providers.environmentVariable('GH_TOKEN'))
+subprojects {
+    apply plugin: 'java'
 
-    ['platform-governance', 'platform-security', 'platform-integrations'].each { repoName ->
-        maven {
-            name = "GitHubPackages_${repoName.replace('-', '_')}"
-            url = uri("https://maven.pkg.github.com/jho951/${repoName}")
-            credentials {
-                username = githubPackagesUsername.get()
-                password = githubPackagesToken.orNull
-            }
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(providers.gradleProperty('java_version').map { it as int }.get())
         }
     }
-}
 
-configurations.configureEach { configuration ->
-    if (configuration.canBeResolved) {
-        configuration.incoming.beforeResolve {
-            def token = providers.gradleProperty('githubPackagesToken')
-                    .orElse(providers.gradleProperty('githubToken'))
-                    .orElse(providers.gradleProperty('ghToken'))
-                    .orElse(providers.gradleProperty('gh_token'))
-                    .orElse(providers.environmentVariable('GH_TOKEN'))
-                    .orNull
-            if (token == null || token.isBlank()) {
-                throw new GradleException(
-                        'GitHub Packages token is required to resolve platform dependencies. ' +
-                                'Set githubPackagesToken in ~/.gradle/gradle.properties or export GH_TOKEN.'
-                )
-            }
-        }
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
     }
-}
-
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(providers.gradleProperty('java_version').map { it as int }.get())
-    }
-}
-
-application {
-    mainClass = 'com.gateway.GatewayApplication'
-}
-
-dependencies {
-    implementation platform("io.github.jho951.platform:platform-governance-bom:2.0.1")
-    implementation platform("io.github.jho951.platform:platform-security-bom:2.0.3")
-    implementation "io.github.jho951.platform:platform-governance-starter"
-    implementation "io.github.jho951.platform:platform-security-starter"
-    implementation "io.github.jho951.platform:platform-security-governance-bridge:1.0.1"
-
-    testImplementation platform('org.junit:junit-bom:5.11.4')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-}
-
-test {
-    useJUnitPlatform()
 }

@@ -19,12 +19,27 @@ case "$ACTION" in
 esac
 
 case "$ENV_NAME" in
-  dev|prod) COMPOSE_FILE="$PROJECT_ROOT/docker/$ENV_NAME/compose.yml" ;;
+  dev|prod)
+    BASE_COMPOSE_FILE="$PROJECT_ROOT/docker/compose.yml"
+    ENV_COMPOSE_FILE="$PROJECT_ROOT/docker/$ENV_NAME/compose.yml"
+    ;;
   *) usage; exit 1 ;;
 esac
 
-if [[ ! -f "$COMPOSE_FILE" ]]; then
-  echo "Compose file not found: $COMPOSE_FILE" >&2
+ENV_FILE="$PROJECT_ROOT/.env.$ENV_NAME"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Env file not found: $ENV_FILE" >&2
+  echo "Create it from .env.example before running Docker." >&2
+  exit 1
+fi
+
+if [[ ! -f "$BASE_COMPOSE_FILE" ]]; then
+  echo "Base Compose file not found: $BASE_COMPOSE_FILE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$ENV_COMPOSE_FILE" ]]; then
+  echo "Compose file not found: $ENV_COMPOSE_FILE" >&2
   exit 1
 fi
 
@@ -57,15 +72,30 @@ if ! docker network inspect "$SHARED_NETWORK" >/dev/null 2>&1; then
 fi
 
 compose() {
-  APP_ENV="$ENV_NAME" SERVICE_SHARED_NETWORK="$SHARED_NETWORK" BACKEND_SHARED_NETWORK="$SHARED_NETWORK" MSA_SHARED_NETWORK="$SHARED_NETWORK" \
-    docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
+  APP_ENV="$ENV_NAME" GATEWAY_ENV_FILE="$ENV_FILE" SERVICE_SHARED_NETWORK="$SHARED_NETWORK" BACKEND_SHARED_NETWORK="$SHARED_NETWORK" MSA_SHARED_NETWORK="$SHARED_NETWORK" \
+    docker compose --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT_NAME" -f "$BASE_COMPOSE_FILE" -f "$ENV_COMPOSE_FILE" "$@"
 }
 
 case "$ACTION" in
-  up) compose up --build "$@" ;;
+  up)
+    if [[ "$ENV_NAME" == "prod" ]]; then
+      compose pull "$@"
+      compose up -d "$@"
+    else
+      compose up --build "$@"
+    fi
+    ;;
   down) compose down --remove-orphans "$@" ;;
   build) compose build "$@" ;;
   logs) compose logs -f "$@" ;;
   ps) compose ps "$@" ;;
-  restart) compose down --remove-orphans && compose up --build "$@" ;;
+  restart)
+    compose down --remove-orphans
+    if [[ "$ENV_NAME" == "prod" ]]; then
+      compose pull "$@"
+      compose up -d "$@"
+    else
+      compose up --build "$@"
+    fi
+    ;;
 esac

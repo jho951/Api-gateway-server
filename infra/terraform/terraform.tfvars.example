@@ -29,14 +29,15 @@ app_env = {
   AUTH_SERVICE_URL        = "http://auth-service:8081"
   USER_SERVICE_URL        = "http://user-service:8082"
   BLOCK_SERVICE_URL       = "http://documents-service:8083"
-  PERMISSION_SERVICE_URL  = "http://permission-service:8084"
-  PERMISSION_ADMIN_VERIFY_URL = "http://permission-service:8084/permissions/internal/admin/verify"
+  AUTHZ_ADMIN_VERIFY_URL = "http://authz-service:8084/permissions/internal/admin/verify"
+  AUTHZ_INTERNAL_JWT_ISSUER = "api-gateway"
+  AUTHZ_INTERNAL_JWT_AUDIENCE = "authz-service"
   REDIS_HOST              = "central-redis"
   REDIS_PORT              = "6379"
   REDIS_TIMEOUT_MS        = "1000"
-  GATEWAY_PERMISSION_CACHE_ENABLED           = "false"
-  GATEWAY_PERMISSION_CACHE_TTL_SECONDS       = "300"
-  GATEWAY_PERMISSION_CACHE_PREFIX            = "gateway:admin-permission:"
+  GATEWAY_AUTHZ_CACHE_ENABLED                = "false"
+  GATEWAY_AUTHZ_CACHE_TTL_SECONDS            = "300"
+  GATEWAY_AUTHZ_CACHE_PREFIX                 = "gateway:admin-authz:"
   GATEWAY_SESSION_CACHE_ENABLED              = "true"
   GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS    = "3"
   GATEWAY_SESSION_CACHE_TTL_SECONDS          = "60"
@@ -45,4 +46,5 @@ app_env = {
 
 app_secret_env = {
   GATEWAY_INTERNAL_REQUEST_SECRET = "replace-with-shared-internal-secret"
+  AUTHZ_INTERNAL_JWT_SECRET = "replace-with-authz-internal-jwt-secret"
 }

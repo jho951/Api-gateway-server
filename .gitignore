@@ -8,15 +8,21 @@ ehthumbs.db
 *.class
 *.log
 logs/
+app/logs/
 
 # Gradle
 .gradle/
 build/
+app/build/
+common/build/
 !gradle/wrapper/gradle-wrapper.jar
 
 # secret
 .env*
 !.env.example
+.env.dev
+.env.local
+.env.prod
 .envrc
 docker/.generated
 

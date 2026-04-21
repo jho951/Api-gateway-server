@@ -15,7 +15,6 @@ public final class AuthApiPaths {
     public static final String SESSION = "/v1/auth/session";
     public static final String REFRESH = "/v1/auth/refresh";
     public static final String LOGOUT = "/v1/auth/logout";
-    public static final String INTERNAL_ALL = "/v1/auth/internal/**";
     public static final String OAUTH2_AUTHORIZATION_ALL = "/v1/oauth2/**";
     public static final String LOGIN_OAUTH2_CALLBACK_ALL = "/v1/login/oauth2/**";
     public static final String JWKS = "/v1/.well-known/jwks.json";

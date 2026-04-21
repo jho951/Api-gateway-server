@@ -2,7 +2,6 @@ package com.gateway.config;
 
 import com.gateway.contract.external.path.AuthApiPaths;
 import com.gateway.contract.external.path.DocumentApiPaths;
-import com.gateway.contract.external.path.InternalApiPaths;
 import com.gateway.contract.external.path.UserApiPaths;
 import com.gateway.routing.RouteDefinition;
 import com.gateway.routing.RouteType;
@@ -21,7 +20,7 @@ public final class GatewayConfig {
     private final Duration requestTimeout;
     private final URI authServiceUri;
     private final URI userServiceUri;
-    private final URI blockServiceUri;
+    private final URI editorServiceUri;
     private final URI authzAdminVerifyUri;
     private final List<String> allowedOrigins;
     private final IpGuardPolicy ipPolicy;
@@ -68,6 +67,7 @@ public final class GatewayConfig {
     private final String authzInternalJwtIssuer;
     private final String authzInternalJwtAudience;
     private final int authzInternalJwtTtlSeconds;
+    private final String authServiceInternalRequestSecret;
     private final String internalRequestSecret;
 
     /**
@@ -76,7 +76,7 @@ public final class GatewayConfig {
      * @param requestTimeout 외부 요청과 업스트림 호출에 공통 적용할 타임아웃
      * @param authServiceUri auth-service 기본 URI
      * @param userServiceUri user-service 기본 URI
-     * @param blockServiceUri block-service 기본 URI
+     * @param editorServiceUri editor-service 기본 URI
      * @param authzAdminVerifyUri 관리자 권한 검증용 내부 호출 URI
      * @param allowedOrigins CORS 허용 Origin 목록
      * @param ipPolicy 일반 외부 IP 허용 정책
@@ -113,6 +113,7 @@ public final class GatewayConfig {
      * @param authzInternalJwtIssuer authz-service 내부 호출 JWT issuer
      * @param authzInternalJwtAudience authz-service 내부 호출 JWT audience
      * @param authzInternalJwtTtlSeconds authz-service 내부 호출 JWT 만료 시간(초)
+     * @param authServiceInternalRequestSecret auth-service 내부 세션 검증 호출용 caller proof secret
      * @param internalRequestSecret INTERNAL 라우트 접근 시 요구되는 호출 주체 비밀값
      * @param routes Gateway 라우팅 정의 목록
      * @param authJwtVerifyEnabled auth-service 토큰 서명 검증 활성화 여부
@@ -129,7 +130,7 @@ public final class GatewayConfig {
             Duration requestTimeout,
             URI authServiceUri,
             URI userServiceUri,
-            URI blockServiceUri,
+            URI editorServiceUri,
             URI authzAdminVerifyUri,
             List<String> allowedOrigins,
             IpGuardPolicy ipPolicy,
@@ -166,6 +167,7 @@ public final class GatewayConfig {
             String authzInternalJwtIssuer,
             String authzInternalJwtAudience,
             int authzInternalJwtTtlSeconds,
+            String authServiceInternalRequestSecret,
             String internalRequestSecret,
             List<RouteDefinition> routes,
             boolean authJwtVerifyEnabled,
@@ -181,7 +183,7 @@ public final class GatewayConfig {
         this.requestTimeout = requestTimeout;
         this.authServiceUri = authServiceUri;
         this.userServiceUri = userServiceUri;
-        this.blockServiceUri = blockServiceUri;
+        this.editorServiceUri = editorServiceUri;
         this.authzAdminVerifyUri = authzAdminVerifyUri;
         this.allowedOrigins = allowedOrigins;
         this.ipPolicy = ipPolicy;
@@ -218,6 +220,7 @@ public final class GatewayConfig {
         this.authzInternalJwtIssuer = authzInternalJwtIssuer;
         this.authzInternalJwtAudience = authzInternalJwtAudience;
         this.authzInternalJwtTtlSeconds = authzInternalJwtTtlSeconds;
+        this.authServiceInternalRequestSecret = authServiceInternalRequestSecret;
         this.internalRequestSecret = internalRequestSecret;
         this.routes = routes;
         this.authJwtVerifyEnabled = authJwtVerifyEnabled;
@@ -259,7 +262,7 @@ public final class GatewayConfig {
         String sessionCacheKeyPrefix = env.getOrDefault("GATEWAY_SESSION_CACHE_KEY_PREFIX", "gateway:session:");
         boolean auditLogEnabled = parseBoolean(env.get("GATEWAY_AUDIT_LOG_ENABLED"), true);
         String auditLogPath = env.getOrDefault("GATEWAY_AUDIT_LOG_PATH", "./logs/audit.log");
-        String auditLogServiceName = env.getOrDefault("GATEWAY_AUDIT_SERVICE_NAME", "api-gateway-server");
+        String auditLogServiceName = env.getOrDefault("GATEWAY_AUDIT_SERVICE_NAME", "gateway-service");
         String auditLogEnv = env.getOrDefault("APP_ENV", "local");
 
         boolean rawAuthJwtVerifyEnabled = parseBoolean(env.get("AUTH_JWT_VERIFY_ENABLED"), false);
@@ -292,10 +295,15 @@ public final class GatewayConfig {
         );
         String internalRequestSecret = nullIfBlank(env.get("GATEWAY_INTERNAL_REQUEST_SECRET"));
         if (internalRequestSecret == null) internalRequestSecret = internalJwtSharedSecret;
+        String authServiceInternalRequestSecret = nullIfBlank(env.get("AUTH_SERVICE_INTERNAL_REQUEST_SECRET"));
+        if (authServiceInternalRequestSecret == null) authServiceInternalRequestSecret = nullIfBlank(env.get("AUTH_INTERNAL_REQUEST_SECRET"));
+        if (authServiceInternalRequestSecret == null) authServiceInternalRequestSecret = internalRequestSecret;
 
         URI authServiceUri = requiredUri(env.get("AUTH_SERVICE_URL"), "AUTH_SERVICE_URL");
         URI userServiceUri = requiredUri(env.get("USER_SERVICE_URL"), "USER_SERVICE_URL");
-        URI blockServiceUri = requiredUri(env.get("BLOCK_SERVICE_URL"), "BLOCK_SERVICE_URL");
+        String editorServiceUrl = env.get("EDITOR_SERVICE_URL");
+        if (editorServiceUrl == null || editorServiceUrl.isBlank()) editorServiceUrl = env.get("BLOCK_SERVICE_URL");
+        URI editorServiceUri = requiredUri(editorServiceUrl, "EDITOR_SERVICE_URL");
         URI authzAdminVerifyUri = optionalUri(env.get("AUTHZ_ADMIN_VERIFY_URL"));
         boolean authzAdminCheckEnabled = authzAdminVerifyUri != null;
 
@@ -317,14 +325,14 @@ public final class GatewayConfig {
                 parseBoolean(env.get("GATEWAY_ADMIN_IP_GUARD_DEFAULT_ALLOW"), false)
         );
 
-        List<RouteDefinition> routes = buildRoutes(authServiceUri, userServiceUri, blockServiceUri);
+        List<RouteDefinition> routes = buildRoutes(authServiceUri, userServiceUri, editorServiceUri);
 
         return new GatewayConfig(
                 new InetSocketAddress(host, port),
                 Duration.ofMillis(requestTimeoutMs),
                 authServiceUri,
                 userServiceUri,
-                blockServiceUri,
+                editorServiceUri,
                 authzAdminVerifyUri,
                 allowedOrigins,
                 ipPolicy,
@@ -361,6 +369,7 @@ public final class GatewayConfig {
                 authzInternalJwtIssuer,
                 authzInternalJwtAudience,
                 authzInternalJwtTtlSeconds,
+                authServiceInternalRequestSecret,
                 internalRequestSecret,
                 routes,
                 authJwtVerifyEnabled,
@@ -377,10 +386,9 @@ public final class GatewayConfig {
     private static List<RouteDefinition> buildRoutes(
             URI authServiceUri,
             URI userServiceUri,
-            URI blockServiceUri
+            URI editorServiceUri
     ) {
         List<RouteDefinition> routes = new ArrayList<>();
-        routes.add(new RouteDefinition(AuthApiPaths.INTERNAL_ALL, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.LOGIN, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.LOGIN_GITHUB, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.OAUTH2_AUTHORIZE_GITHUB, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
@@ -395,14 +403,12 @@ public final class GatewayConfig {
         routes.add(new RouteDefinition(AuthApiPaths.JWKS, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.ME, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(AuthApiPaths.ERROR, RouteType.PUBLIC, "auth", authServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(InternalApiPaths.INTERNAL_ALL, RouteType.INTERNAL, "internal", authServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(UserApiPaths.SIGNUP, RouteType.PUBLIC, "user", userServiceUri, AuthApiPaths.API_PREFIX));
         routes.add(new RouteDefinition(UserApiPaths.ME, RouteType.PROTECTED, "user", userServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(UserApiPaths.INTERNAL_FIND_OR_CREATE_AND_LINK_SOCIAL, RouteType.INTERNAL, "user", userServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(UserApiPaths.INTERNAL_USERS_ALL, RouteType.INTERNAL, "user", userServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(DocumentApiPaths.DOCUMENTS_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(DocumentApiPaths.EDITOR_OPERATIONS_ALL, RouteType.PROTECTED, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
-        routes.add(new RouteDefinition(DocumentApiPaths.ADMIN_ALL, RouteType.ADMIN, "block", blockServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(DocumentApiPaths.DOCUMENTS_ALL, RouteType.PROTECTED, "editor", editorServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(DocumentApiPaths.BLOCKS_ALL, RouteType.PROTECTED, "editor", editorServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(DocumentApiPaths.EDITOR_OPERATIONS_ALL, RouteType.PROTECTED, "editor", editorServiceUri, AuthApiPaths.API_PREFIX));
+        routes.add(new RouteDefinition(DocumentApiPaths.ADMIN_ALL, RouteType.ADMIN, "editor", editorServiceUri, AuthApiPaths.API_PREFIX));
         routes.sort(RouteDefinition.MOST_SPECIFIC_FIRST);
         return List.copyOf(routes);
     }
@@ -461,9 +467,9 @@ public final class GatewayConfig {
     public URI userServiceUri() {
         return userServiceUri;
     }
-    /** block-service 기본 URI를 반환합니다. */
-    public URI blockServiceUri() {
-        return blockServiceUri;
+    /** editor-service 기본 URI를 반환합니다. */
+    public URI editorServiceUri() {
+        return editorServiceUri;
     }
     /** 관리자 권한 검증용 내부 호출 URI를 반환합니다. */
     public URI authzAdminVerifyUri() {
@@ -561,6 +567,8 @@ public final class GatewayConfig {
     public String authzInternalJwtAudience() {return authzInternalJwtAudience;}
     /** authz-service 내부 호출 JWT 만료 시간(초)을 반환합니다. */
     public int authzInternalJwtTtlSeconds() {return authzInternalJwtTtlSeconds;}
+    /** auth-service 내부 세션 검증 호출에 보낼 caller proof secret을 반환합니다. */
+    public String authServiceInternalRequestSecret() {return authServiceInternalRequestSecret;}
     /** INTERNAL 라우트 접근 시 요구되는 호출 주체 비밀값을 반환합니다. */
     public String internalRequestSecret() {return internalRequestSecret;}
     /** auth-service 토큰 검증 활성화 여부를 반환합니다. */

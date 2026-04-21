@@ -94,12 +94,16 @@ class GatewaySpringIntegrationTest {
         AtomicInteger blockCalls = new AtomicInteger();
         AtomicReference<String> authHeaderSeenByBlock = new AtomicReference<>();
         AtomicReference<String> userIdHeaderSeenByBlock = new AtomicReference<>();
+        AtomicReference<String> internalSecretHeaderSeenByAuth = new AtomicReference<>();
 
         startUpstreams(validateCalls, "user-123", blockCalls, exchange -> {
             authHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("Authorization"));
             userIdHeaderSeenByBlock.set(exchange.getRequestHeaders().getFirst("X-User-Id"));
             writeJson(exchange, 200, "{\"ok\":true}");
-        }, null, null, null, null);
+        }, exchange -> {
+            internalSecretHeaderSeenByAuth.set(exchange.getRequestHeaders().getFirst("X-Internal-Request-Secret"));
+            writeJson(exchange, 200, "{\"authenticated\":true,\"userId\":\"user-123\",\"status\":\"A\"}");
+        }, null, null, null);
         startGateway();
 
         String callerToken = "Bearer " + jwt("{\"sub\":\"user-123\",\"exp\":4102444800}");
@@ -113,11 +117,37 @@ class GatewaySpringIntegrationTest {
         assertEquals(200, response.statusCode());
         assertEquals(1, validateCalls.get());
         assertEquals(1, blockCalls.get());
+        assertEquals("local-internal-api-key", internalSecretHeaderSeenByAuth.get());
         assertEquals("user-123", userIdHeaderSeenByBlock.get());
         assertNotNull(authHeaderSeenByBlock.get());
         assertTrue(authHeaderSeenByBlock.get().startsWith("Bearer "));
         assertNotEquals(callerToken, authHeaderSeenByBlock.get());
         assertEquals("A", jwtClaim(authHeaderSeenByBlock.get(), "status"));
+    }
+
+    @Test
+    void blockAttachmentRouteForwardsToEditorService() throws Exception {
+        AtomicInteger validateCalls = new AtomicInteger();
+        AtomicInteger blockCalls = new AtomicInteger();
+        AtomicReference<String> editorPath = new AtomicReference<>();
+
+        startUpstreams(validateCalls, "user-123", blockCalls, exchange -> {
+            editorPath.set(exchange.getRequestURI().getPath());
+            writeJson(exchange, 200, "{\"ok\":true}");
+        }, null, null, null, null);
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayRequest(
+                "/v1/blocks/block-1/attachments/att-1",
+                "Bearer " + jwt("{\"sub\":\"user-123\",\"exp\":4102444800}"),
+                null,
+                Map.of("X-Client-Type", "api")
+        );
+
+        assertEquals(200, response.statusCode());
+        assertEquals(1, validateCalls.get());
+        assertEquals(1, blockCalls.get());
+        assertEquals("/blocks/block-1/attachments/att-1", editorPath.get());
     }
 
     @Test
@@ -287,14 +317,14 @@ class GatewaySpringIntegrationTest {
     }
 
     @Test
-    void internalRouteRequiresSecret() throws Exception {
+    void internalRouteIsNotExposedPublicly() throws Exception {
         startUpstreams(new AtomicInteger(), "user-123", new AtomicInteger(), null, null, null, null, null);
         startGateway();
 
         HttpResponse<String> response = sendGatewayRequest("/v1/internal/ping", null, null, Map.of());
 
-        assertEquals(403, response.statusCode());
-        assertTrue(response.body().contains("\"code\":\"1006\""), response.body());
+        assertEquals(404, response.statusCode());
+        assertTrue(response.body().contains("\"code\":\"1007\""), response.body());
     }
 
     @Test
@@ -331,7 +361,7 @@ class GatewaySpringIntegrationTest {
         blockServer = null;
 
         int unavailablePort = findFreePort();
-        startGateway(Map.of("BLOCK_SERVICE_URL", "http://127.0.0.1:" + unavailablePort));
+        startGateway(Map.of("EDITOR_SERVICE_URL", "http://127.0.0.1:" + unavailablePort));
 
         HttpResponse<String> response = sendGatewayRequest(
                 "/v1/documents/doc-1",
@@ -442,6 +472,7 @@ class GatewaySpringIntegrationTest {
             writeJson(exchange, 200, "{\"ok\":true}");
         };
         blockServer.createContext("/documents", blockEntry);
+        blockServer.createContext("/blocks", blockEntry);
         blockServer.createContext("/editor-operations", blockEntry);
         blockServer.createContext("/admin", blockEntry);
         blockServer.start();
@@ -472,10 +503,11 @@ class GatewaySpringIntegrationTest {
         env.put("GATEWAY_ADMIN_IP_GUARD_ENABLED", "false");
         env.put("GATEWAY_AUTHZ_CACHE_ENABLED", "false");
         env.put("AUTH_JWT_VERIFY_ENABLED", "false");
+        env.put("AUTH_SERVICE_INTERNAL_REQUEST_SECRET", "local-internal-api-key");
         env.put("AUTH_SERVICE_URL", "http://127.0.0.1:" + authServer.getAddress().getPort());
         env.put("USER_SERVICE_URL", "http://127.0.0.1:" + userServer.getAddress().getPort());
         if (blockServer != null) {
-            env.put("BLOCK_SERVICE_URL", "http://127.0.0.1:" + blockServer.getAddress().getPort());
+            env.put("EDITOR_SERVICE_URL", "http://127.0.0.1:" + blockServer.getAddress().getPort());
         }
         if (authzServer != null) {
             String authzBase = "http://127.0.0.1:" + authzServer.getAddress().getPort();
@@ -495,7 +527,7 @@ class GatewaySpringIntegrationTest {
         Map<String, Object> defaults = new LinkedHashMap<>(runtimeEnvironment.variables());
         defaults.put("server.address", config.bindAddress().getHostString());
         defaults.put("server.port", String.valueOf(config.bindAddress().getPort()));
-        defaults.put("spring.application.name", "api-gateway-server");
+        defaults.put("spring.application.name", "gateway-service");
         defaults.put("spring.main.web-application-type", "reactive");
         defaults.put("spring.cloud.gateway.server.webflux.forwarded.enabled", "true");
         defaults.put("management.endpoints.web.exposure.include", "health,info,metrics,prometheus");

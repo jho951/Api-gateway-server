@@ -21,7 +21,13 @@ import java.util.Map;
  */
 @SpringBootApplication(excludeName = {
         "io.github.jho951.platform.security.autoconfigure.PlatformSecurityAutoConfiguration",
-        "io.github.jho951.platform.security.internal.autoconfigure.PlatformSecurityInternalAutoConfiguration"
+        "io.github.jho951.platform.security.internal.autoconfigure.PlatformSecurityInternalAutoConfiguration",
+        "io.github.jho951.platform.security.issuer.autoconfigure.PlatformSecurityIssuerAutoConfiguration",
+        "io.github.jho951.platform.security.issuer.starter.PlatformSecurityIssuerStarterAutoConfiguration",
+        "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration",
+        "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration",
+        "org.springframework.boot.autoconfigure.security.oauth2.resource.reactive.ReactiveOAuth2ResourceServerAutoConfiguration",
+        "org.springframework.boot.actuate.autoconfigure.security.reactive.ReactiveManagementWebSecurityAutoConfiguration"
 })
 public final class GatewayApplication {
     private GatewayApplication() {}
@@ -33,7 +39,7 @@ public final class GatewayApplication {
         Map<String, Object> defaults = new LinkedHashMap<>(runtimeEnvironment.variables());
         defaults.put("server.address", config.bindAddress().getHostString());
         defaults.put("server.port", String.valueOf(config.bindAddress().getPort()));
-        defaults.put("spring.application.name", "api-gateway-server");
+        defaults.put("spring.application.name", "gateway-service");
         defaults.put("spring.main.web-application-type", "reactive");
         defaults.put("spring.cloud.gateway.server.webflux.forwarded.enabled", "true");
         defaults.put("management.endpoints.web.exposure.include", "health,info,metrics,prometheus");

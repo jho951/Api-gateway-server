@@ -7,6 +7,9 @@ public final class DocumentApiPaths {
     /** 문서 일반 경로 */
     public static final String DOCUMENTS_ALL = "/v1/documents/**";
 
+    /** 블록 및 첨부파일 경로 */
+    public static final String BLOCKS_ALL = "/v1/blocks/**";
+
     /** 에디터 작업 경로 */
     public static final String EDITOR_OPERATIONS_ALL = "/v1/editor-operations/**";
 

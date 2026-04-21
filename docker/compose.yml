@@ -1,10 +1,13 @@
 name: gateway-service
 
 services:
-  gateway:
+  gateway-service:
     image: ${GATEWAY_IMAGE:-ghcr.io/jho951/gateway-service:latest}
     networks:
-      - service-shared
+      service-shared:
+        aliases:
+          - gateway-service
+          - gateway
 
 networks:
   service-shared:

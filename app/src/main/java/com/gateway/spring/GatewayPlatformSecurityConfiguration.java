@@ -151,7 +151,7 @@ public class GatewayPlatformSecurityConfiguration {
                         config.authJwtAudience(),
                         config.authJwtClockSkewSeconds()
                 ),
-                new AuthServiceClient(config.requestTimeout()),
+                new AuthServiceClient(config.requestTimeout(), config.authServiceInternalRequestSecret()),
                 new LocalSessionCache(config.sessionCacheEnabled() ? config.sessionLocalCacheTtlSeconds() : 0),
                 new RedisSessionCache(
                         config.sessionCacheEnabled(),

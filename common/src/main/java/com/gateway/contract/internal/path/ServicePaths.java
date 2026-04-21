@@ -20,12 +20,15 @@ public final class ServicePaths {
         public static final String ADMIN_VERIFY = "/permissions/internal/admin/verify";
     }
 
-    /** block-service downstream 경로 */
-    public static final class Block {
-        private Block() {}
+    /** editor-service downstream 경로 */
+    public static final class Editor {
+        private Editor() {}
 
         /** 문서 리소스 루트 */
         public static final String DOCUMENTS = "/documents";
+
+        /** 블록 및 첨부파일 리소스 루트 */
+        public static final String BLOCKS = "/blocks";
 
         /** 에디터 작업 리소스 루트 */
         public static final String EDITOR_OPERATIONS = "/editor-operations";

@@ -47,6 +47,7 @@ public final class AuthServiceClient {
     private final HttpClient client;
     // 너무 오래 걸리면 끊는 제한값
     private final Duration timeout;
+    private final String internalRequestSecret;
 
     /**
      * 응답 헤더에서 특정 이름을 가진 첫 번째 값을 추출합니다.
@@ -85,12 +86,13 @@ public final class AuthServiceClient {
      * 생성자 (생성자 호출로 직접 생성이 불가해 Builder 패턴 적용)
      * @param timeout 연결 및 요청 타임아웃 설정 시간
      */
-    public AuthServiceClient(Duration timeout) {
+    public AuthServiceClient(Duration timeout, String internalRequestSecret) {
         this.client = HttpClient.newBuilder()
                 .connectTimeout(timeout)
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.timeout = timeout;
+        this.internalRequestSecret = internalRequestSecret;
     }
 
     /**
@@ -122,6 +124,9 @@ public final class AuthServiceClient {
                 .POST(HttpRequest.BodyPublishers.noBody())
                 .header(TraceHeaders.REQUEST_ID, requestId)
                 .header(TraceHeaders.CORRELATION_ID, correlationId);
+        if (internalRequestSecret != null && !internalRequestSecret.isBlank()) {
+            requestBuilder.header("X-Internal-Request-Secret", internalRequestSecret);
+        }
         if (authorizationHeader != null && !authorizationHeader.isBlank()) {
             requestBuilder.header("Authorization", authorizationHeader);
         }

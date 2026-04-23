@@ -20,14 +20,11 @@ import java.util.Map;
  * </p>
  */
 @SpringBootApplication(excludeName = {
-        "io.github.jho951.platform.security.autoconfigure.PlatformSecurityAutoConfiguration",
-        "io.github.jho951.platform.security.internal.autoconfigure.PlatformSecurityInternalAutoConfiguration",
-        "io.github.jho951.platform.security.issuer.autoconfigure.PlatformSecurityIssuerAutoConfiguration",
-        "io.github.jho951.platform.security.issuer.starter.PlatformSecurityIssuerStarterAutoConfiguration",
         "org.springframework.boot.autoconfigure.security.reactive.ReactiveSecurityAutoConfiguration",
         "org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDetailsServiceAutoConfiguration",
         "org.springframework.boot.autoconfigure.security.oauth2.resource.reactive.ReactiveOAuth2ResourceServerAutoConfiguration",
-        "org.springframework.boot.actuate.autoconfigure.security.reactive.ReactiveManagementWebSecurityAutoConfiguration"
+        "org.springframework.boot.actuate.autoconfigure.security.reactive.ReactiveManagementWebSecurityAutoConfiguration",
+        "io.github.jho951.platform.security.autoconfigure.PlatformSecurityHybridWebAdapterAutoConfiguration"
 })
 public final class GatewayApplication {
     private GatewayApplication() {}

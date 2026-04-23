@@ -38,7 +38,7 @@ Gateway가 authz-service `POST /permissions/internal/admin/verify`를 호출할 
 | `X-Request-Id` | 단일 요청 추적 ID |
 | `X-Correlation-Id` | 서비스 간 추적 ID |
 | `Authorization` | authz-service 운영 JWT internal auth용 `Bearer <internal-service-jwt>` |
-| `X-Internal-Request-Secret` | Gateway와 authz-service가 공유하는 내부 secret |
+| `X-Internal-Request-Secret` | local/test compat가 켜진 경우에만 전달하는 legacy secret |
 
 ## 권한 정책
 
@@ -51,13 +51,13 @@ Gateway가 authz-service `POST /permissions/internal/admin/verify`를 호출할 
 - 현재 공식 모드는 `Hybrid Embedded Gateway Mode` 입니다.
 - Gateway는 auth-service 검증 결과를 바탕으로 `platform-security`가 판정하도록 연결되어 있습니다.
 - `PUBLIC`, `PROTECTED`, `ADMIN`, `INTERNAL` 분류는 Gateway route 기준으로 platform-security에 전달됩니다.
-- credential 검증은 `GatewayPlatformSecurityWebFilter`가 수행하고, 그 결과를 `SecurityContext`로 만들어 platform policy에 넘깁니다.
+- credential 검증은 `GatewayPlatformSecurityWebFilter`가 수행하고, 그 결과를 `HybridSecurityRuntime`과 additive `SecurityPolicy` 흐름으로 넘깁니다.
 - IP 허용, login rate-limit, admin authz 위임도 platform policy 흐름 안에서 처리됩니다.
 - Gateway 본체는 허용된 요청을 upstream으로 전달하는 집행자 역할만 남깁니다.
 - `platform-security-governance-bridge`는 security verdict를 governance audit recorder로 발행합니다.
-- 관리자 최종 인가는 authz-service `/permissions/internal/admin/verify`가 결정하지만, 호출 위치는 Gateway 고유 로직이 아니라 platform policy service입니다.
+- 관리자 최종 인가는 authz-service `/permissions/internal/admin/verify`가 결정하지만, 호출 위치는 Gateway 고유 `SecurityPolicy` bean 안의 platform policy 흐름입니다.
 - security audit와 operational audit는 분리합니다. security audit는 platform bridge가, upstream/proxy audit는 gateway operational audit port가 담당합니다.
-- starter 기본 filter auto-registration과 내부 인증 auto-config는 명시적으로 비활성합니다. `GatewayApplication`에서 `PlatformSecurityAutoConfiguration`, `PlatformSecurityInternalAutoConfiguration`을 exclude 하고, gateway 고유 filter chain만 사용합니다.
+- gateway는 `platform-security-hybrid-web-adapter`를 sanctioned add-on으로 사용합니다. `GatewayApplication`은 hybrid auto-config만 exclude 하고, gateway 고유 filter chain과 `GatewayPlatformSecurityConfiguration`이 `HybridSecurityRuntime`을 조립합니다.
 
 ## 운영 권장값
 

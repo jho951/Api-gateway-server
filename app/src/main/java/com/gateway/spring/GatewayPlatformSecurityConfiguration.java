@@ -1,15 +1,17 @@
 package com.gateway.spring;
 
-import com.gateway.audit.GatewayFileAuditLogRecorder;
-import com.gateway.audit.GatewayAuditService;
+import com.auditlog.api.AuditEvent;
+import com.auditlog.api.AuditSink;
 import com.gateway.audit.GatewayAuditRecorder;
+import com.gateway.audit.GatewayAuditService;
+import com.gateway.audit.GatewayFileAuditLogRecorder;
 import com.gateway.audit.GatewayOperationalAuditPort;
 import com.gateway.auth.AuthServiceClient;
 import com.gateway.auth.AuthzServiceClient;
 import com.gateway.cache.LocalSessionCache;
 import com.gateway.cache.RedisAuthzCache;
-import com.gateway.cache.RedisSsoSessionStore;
 import com.gateway.cache.RedisSessionCache;
+import com.gateway.cache.RedisSsoSessionStore;
 import com.gateway.config.GatewayConfig;
 import com.gateway.contract.external.path.AuthApiPaths;
 import com.gateway.policy.RequestWindowRateLimiter;
@@ -17,16 +19,15 @@ import com.gateway.security.AuthSessionValidator;
 import com.gateway.security.AuthTokenVerifier;
 import com.gateway.security.InternalJwtIssuer;
 import com.gateway.security.JwtPrecheckPolicy;
-import io.github.jho951.platform.governance.api.AuditLogRecorder;
-import io.github.jho951.platform.security.api.SecurityAuditMode;
-import io.github.jho951.platform.security.api.SecurityAuditPublisher;
+import io.github.jho951.platform.governance.api.AuditEntry;
+import io.github.jho951.platform.security.api.PlatformSecurityHybridWebAdapterMarker;
 import io.github.jho951.platform.security.api.SecurityContext;
+import io.github.jho951.platform.security.api.SecurityEvaluationService;
 import io.github.jho951.platform.security.api.SecurityPolicy;
 import io.github.jho951.platform.security.api.SecurityPolicyService;
 import io.github.jho951.platform.security.api.SecurityRequest;
 import io.github.jho951.platform.security.api.SecurityVerdict;
-import io.github.jho951.platform.security.core.DefaultSecurityPolicyService;
-import io.github.jho951.platform.security.governance.GovernanceSecurityAuditPublisher;
+import io.github.jho951.platform.security.hybrid.HybridSecurityRuntime;
 import io.github.jho951.platform.security.policy.AuthMode;
 import io.github.jho951.platform.security.policy.AuthenticationModeResolver;
 import io.github.jho951.platform.security.policy.BoundaryIpPolicyProvider;
@@ -34,19 +35,20 @@ import io.github.jho951.platform.security.policy.BoundaryRateLimitPolicyProvider
 import io.github.jho951.platform.security.policy.ClientType;
 import io.github.jho951.platform.security.policy.ClientTypeResolver;
 import io.github.jho951.platform.security.policy.PlatformPrincipalFactory;
+import io.github.jho951.platform.security.policy.SecurityAttributes;
 import io.github.jho951.platform.security.policy.SecurityBoundary;
 import io.github.jho951.platform.security.policy.SecurityBoundaryResolver;
 import io.github.jho951.platform.security.policy.SecurityBoundaryType;
 import io.github.jho951.platform.security.web.ReactiveSecurityFailureResponseWriter;
-import io.github.jho951.platform.security.web.SecurityIngressAdapter;
-import org.springframework.beans.factory.ObjectProvider;
+import io.github.jho951.platform.security.web.SecurityFailureResponse;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.nio.file.Path;
-import java.util.List;
-import java.util.Locale;
 
 @Configuration
 public class GatewayPlatformSecurityConfiguration {
@@ -58,6 +60,12 @@ public class GatewayPlatformSecurityConfiguration {
     public static final String ATTR_ORIGINAL_METHOD = "gateway.security.originalMethod";
     public static final String ATTR_ORIGINAL_PATH = "gateway.security.originalPath";
     public static final String ATTR_USER_STATUS = "gateway.security.userStatus";
+
+    @Bean
+    public PlatformSecurityHybridWebAdapterMarker gatewayPlatformSecurityHybridWebAdapterMarker() {
+        return new PlatformSecurityHybridWebAdapterMarker() {
+        };
+    }
 
     @Bean
     public SecurityBoundaryResolver gatewaySecurityBoundaryResolver() {
@@ -224,44 +232,42 @@ public class GatewayPlatformSecurityConfiguration {
     }
 
     @Bean
-    public SecurityPolicyService gatewaySecurityPolicyService(
+    public SecurityPolicy gatewayAdminAuthorizationPolicy(
             GatewayConfig config,
-            SecurityBoundaryResolver boundaryResolver,
-            ClientTypeResolver clientTypeResolver,
-            AuthenticationModeResolver authenticationModeResolver,
-            BoundaryIpPolicyProvider boundaryIpPolicyProvider,
-            BoundaryRateLimitPolicyProvider boundaryRateLimitPolicyProvider,
-            PlatformPrincipalFactory principalFactory,
             AuthzServiceClient gatewayAuthzServiceClient,
             RedisAuthzCache gatewayAuthzCache
     ) {
-        SecurityPolicyService delegate = new DefaultSecurityPolicyService(
-                boundaryResolver,
-                clientTypeResolver,
-                authenticationModeResolver,
-                boundaryIpPolicyProvider,
-                boundaryRateLimitPolicyProvider,
-                principalFactory
-        );
-        return new GatewayPlatformSecurityPolicyService(
-                delegate,
-                config,
-                gatewayAuthzServiceClient,
-                gatewayAuthzCache
-        );
+        return new GatewayAdminAuthorizationPolicy(config, gatewayAuthzServiceClient, gatewayAuthzCache);
     }
 
     @Bean
-    public SecurityIngressAdapter gatewaySecurityIngressAdapter(
+    public HybridSecurityRuntime gatewayHybridSecurityRuntime(
+            SecurityBoundaryResolver securityBoundaryResolver,
             SecurityPolicyService securityPolicyService,
-            SecurityBoundaryResolver boundaryResolver
+            SecurityEvaluationService securityEvaluationService
     ) {
-        return new SecurityIngressAdapter(securityPolicyService, boundaryResolver);
+        return new HybridSecurityRuntime(
+                request -> withResolvedBoundary(request, securityBoundaryResolver),
+                (request, context) -> securityPolicyService.evaluate(
+                        withResolvedBoundary(request, securityBoundaryResolver),
+                        context
+                ),
+                (request, context) -> securityEvaluationService.evaluateResult(
+                        withResolvedBoundary(request, securityBoundaryResolver),
+                        context
+                ),
+                (request, context) -> SecurityFailureResponse.from(
+                        securityEvaluationService.evaluateResult(
+                                withResolvedBoundary(request, securityBoundaryResolver),
+                                context
+                        ).verdict()
+                )
+        );
     }
 
     @Bean
-    public GatewaySecurityEvaluator gatewaySecurityEvaluator(SecurityIngressAdapter gatewaySecurityIngressAdapter) {
-        return new PlatformGatewaySecurityEvaluator(gatewaySecurityIngressAdapter);
+    public GatewaySecurityEvaluator gatewaySecurityEvaluator(HybridSecurityRuntime gatewayHybridSecurityRuntime) {
+        return new PlatformGatewaySecurityEvaluator(gatewayHybridSecurityRuntime);
     }
 
     @Bean("gatewayPlatformExternalAuditRecorder")
@@ -275,22 +281,16 @@ public class GatewayPlatformSecurityConfiguration {
 
     @Bean
     public GatewayAuditRecorder gatewayAuditRecorder(
-            @Qualifier("gatewayPlatformExternalAuditRecorder") GatewayAuditRecorder externalRecorder,
-            @Qualifier("platformGovernanceAuditLogRecorder") ObjectProvider<AuditLogRecorder> governanceRecorderProvider
+            @Qualifier("gatewayPlatformExternalAuditRecorder") GatewayAuditRecorder externalRecorder
     ) {
-        AuditLogRecorder governanceRecorder = governanceRecorderProvider.getIfAvailable();
-        if (governanceRecorder != null) {
-            return new PlatformGovernanceAuditRecorderAdapter(governanceRecorder);
-        }
         return externalRecorder;
     }
 
     @Bean
-    public SecurityAuditPublisher gatewaySecurityAuditPublisher(
-            GatewayAuditRecorder gatewayAuditRecorder
+    public AuditSink gatewayGovernanceAuditSink(
+            @Qualifier("gatewayPlatformExternalAuditRecorder") GatewayAuditRecorder externalRecorder
     ) {
-        AuditLogRecorder recorder = new PlatformSecurityAuditLogRecorderAdapter(gatewayAuditRecorder);
-        return new GovernanceSecurityAuditPublisher(recorder, SecurityAuditMode.ALL);
+        return event -> externalRecorder.record(toGatewayAuditEntry(event));
     }
 
     @Bean
@@ -386,5 +386,56 @@ public class GatewayPlatformSecurityConfiguration {
                 || AuthApiPaths.SSO_START_LEGACY.equals(path)
                 || AuthApiPaths.OAUTH2_AUTHORIZE_GITHUB.equals(path)
                 || path.startsWith("/v1/oauth2/authorization/");
+    }
+
+    private static SecurityRequest withResolvedBoundary(
+            SecurityRequest request,
+            SecurityBoundaryResolver securityBoundaryResolver
+    ) {
+        SecurityBoundary boundary = securityBoundaryResolver.resolve(request);
+        Map<String, String> attributes = new LinkedHashMap<>(request.attributes());
+        attributes.put(SecurityAttributes.BOUNDARY, boundary.type().name());
+        attributes.put(SecurityAttributes.BOUNDARY_PATTERNS, String.join(",", boundary.patterns()));
+        return new SecurityRequest(
+                request.subject(),
+                request.clientIp(),
+                request.path(),
+                request.action(),
+                attributes,
+                request.occurredAt()
+        );
+    }
+
+    private static AuditEntry toGatewayAuditEntry(AuditEvent event) {
+        Map<String, String> attributes = new LinkedHashMap<>();
+        attributes.put("eventId", safe(event.getEventId()));
+        attributes.put("actorId", safe(event.getActorId()));
+        attributes.put("actorType", event.getActorType().name());
+        attributes.put("actorName", safe(event.getActorName()));
+        attributes.put("eventType", event.getEventType().name());
+        attributes.put("action", safe(event.getAction()));
+        attributes.put("resourceType", safe(event.getResourceType()));
+        attributes.put("resourceId", safe(event.getResourceId()));
+        attributes.put("result", event.getResult().name());
+        attributes.put("reason", safe(event.getReason()));
+        attributes.put("traceId", safe(event.getTraceId()));
+        attributes.put("requestId", safe(event.getRequestId()));
+        attributes.put("clientIp", safe(event.getClientIp()));
+        attributes.put("userAgent", safe(event.getUserAgent()));
+        event.getDetails().forEach((key, value) -> {
+            if (key != null && value != null) {
+                attributes.put("detail." + key, String.valueOf(value));
+            }
+        });
+        return new AuditEntry(
+                "gateway-platform",
+                safe(event.getAction()),
+                attributes,
+                event.getOccurredAt()
+        );
+    }
+
+    private static String safe(String value) {
+        return value == null ? "" : value;
     }
 }

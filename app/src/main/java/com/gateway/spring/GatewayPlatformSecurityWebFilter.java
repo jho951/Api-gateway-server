@@ -22,7 +22,7 @@ import io.github.jho951.platform.security.policy.AuthMode;
 import io.github.jho951.platform.security.policy.ClientType;
 import io.github.jho951.platform.security.policy.SecurityBoundaryType;
 import io.github.jho951.platform.security.web.ReactiveSecurityFailureResponseWriter;
-import io.github.jho951.platform.security.web.SecurityDownstreamIdentityPropagator;
+import io.github.jho951.platform.security.web.SecurityDownstreamAttributes;
 import io.github.jho951.platform.security.web.SecurityFailureResponse;
 import org.springframework.core.Ordered;
 import org.springframework.http.HttpHeaders;
@@ -106,7 +106,7 @@ public final class GatewayPlatformSecurityWebFilter implements WebFilter, Ordere
                                 .doOnSuccess(ignored -> recordDenied(exchange, decision, startedAt, clientIp));
                     }
                     exchange.getAttributes().put(
-                            SecurityDownstreamIdentityPropagator.ATTR_DOWNSTREAM_HEADERS,
+                            SecurityDownstreamAttributes.ATTR_DOWNSTREAM_HEADERS,
                             downstreamIdentityProjector.asAttributes(decision.evaluationResult())
                     );
                     exchange.getAttributes().put(GatewaySecurityExchangeAttributes.AUTH_OUTCOME, decision.authOutcome());

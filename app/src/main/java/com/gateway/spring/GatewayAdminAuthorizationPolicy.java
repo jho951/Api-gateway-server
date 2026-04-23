@@ -6,48 +6,45 @@ import com.gateway.cache.RedisAuthzCache;
 import com.gateway.config.GatewayConfig;
 import com.gateway.security.SessionCacheKey;
 import io.github.jho951.platform.security.api.SecurityContext;
-import io.github.jho951.platform.security.api.SecurityPolicyService;
+import io.github.jho951.platform.security.api.SecurityPolicy;
 import io.github.jho951.platform.security.api.SecurityRequest;
 import io.github.jho951.platform.security.api.SecurityVerdict;
+import io.github.jho951.platform.security.policy.SecurityAttributes;
 
 import java.io.IOException;
+import java.util.Objects;
 
-public final class GatewayPlatformSecurityPolicyService implements SecurityPolicyService {
-    private final SecurityPolicyService delegate;
+final class GatewayAdminAuthorizationPolicy implements SecurityPolicy {
     private final GatewayConfig config;
     private final AuthzServiceClient authzServiceClient;
     private final RedisAuthzCache authzCache;
 
-    public GatewayPlatformSecurityPolicyService(
-            SecurityPolicyService delegate,
+    GatewayAdminAuthorizationPolicy(
             GatewayConfig config,
             AuthzServiceClient authzServiceClient,
             RedisAuthzCache authzCache
     ) {
-        this.delegate = delegate;
-        this.config = config;
-        this.authzServiceClient = authzServiceClient;
-        this.authzCache = authzCache;
+        this.config = Objects.requireNonNull(config, "config");
+        this.authzServiceClient = Objects.requireNonNull(authzServiceClient, "authzServiceClient");
+        this.authzCache = Objects.requireNonNull(authzCache, "authzCache");
+    }
+
+    @Override
+    public String name() {
+        return "gateway-admin-authz";
     }
 
     @Override
     public SecurityVerdict evaluate(SecurityRequest request, SecurityContext context) {
-        SecurityVerdict baseVerdict = delegate.evaluate(request, context);
-        if (!baseVerdict.allowed()) {
-            return baseVerdict;
+        String boundary = request.attributes().get(SecurityAttributes.BOUNDARY);
+        if (!"ADMIN".equalsIgnoreCase(boundary)) {
+            return SecurityVerdict.allow(name(), "non-admin boundary");
         }
-        if (!"ADMIN".equals(request.attributes().get(GatewayPlatformSecurityConfiguration.ATTR_BOUNDARY))) {
-            return baseVerdict;
-        }
-        return evaluateAdminAuthz(request, context);
-    }
-
-    private SecurityVerdict evaluateAdminAuthz(SecurityRequest request, SecurityContext context) {
         if (!context.authenticated() || context.principal() == null || context.principal().isBlank()) {
-            return SecurityVerdict.deny("authz", "authenticated admin context required");
+            return SecurityVerdict.deny(name(), "authenticated admin context required");
         }
         if (!config.authzAdminCheckEnabled() || config.authzAdminVerifyUri() == null) {
-            return SecurityVerdict.deny("authz", "admin authorization is not configured");
+            return SecurityVerdict.deny(name(), "admin authorization is not configured");
         }
 
         String requestMethod = request.attributes().getOrDefault(
@@ -80,8 +77,8 @@ public final class GatewayPlatformSecurityPolicyService implements SecurityPolic
         Boolean cached = authzCache.get(cacheKey);
         if (cached != null) {
             return cached
-                    ? SecurityVerdict.allow("authz", "admin authorization granted from cache")
-                    : SecurityVerdict.deny("authz", "admin authorization denied from cache");
+                    ? SecurityVerdict.allow(name(), "admin authorization granted from cache")
+                    : SecurityVerdict.deny(name(), "admin authorization denied from cache");
         }
 
         boolean allowed;
@@ -95,17 +92,17 @@ public final class GatewayPlatformSecurityPolicyService implements SecurityPolic
                     new AuthResult(200, true, context.principal(), role, "", sessionId),
                     config.internalRequestSecret()
             );
-        } catch (IOException ex) {
-            return SecurityVerdict.deny("authz", "admin authorization unavailable");
-        } catch (InterruptedException ex) {
+        } catch (IOException exception) {
+            return SecurityVerdict.deny(name(), "admin authorization unavailable");
+        } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            return SecurityVerdict.deny("authz", "admin authorization interrupted");
+            return SecurityVerdict.deny(name(), "admin authorization interrupted");
         }
 
         authzCache.put(cacheKey, allowed);
         return allowed
-                ? SecurityVerdict.allow("authz", "admin authorization granted")
-                : SecurityVerdict.deny("authz", "admin authorization denied");
+                ? SecurityVerdict.allow(name(), "admin authorization granted")
+                : SecurityVerdict.deny(name(), "admin authorization denied");
     }
 
     private String safeCachePart(String value) {

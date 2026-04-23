@@ -74,20 +74,22 @@ GatewayApplication
 사용하는 플랫폼 의존성은 다음과 같습니다.
 
 ```gradle
-implementation platform("io.github.jho951.platform:platform-governance-bom:2.0.2")
-implementation platform("io.github.jho951.platform:platform-security-bom:2.0.5")
+implementation platform("io.github.jho951.platform:platform-runtime-bom:3.0.0")
+implementation platform("io.github.jho951.platform:platform-governance-bom:3.0.0")
+implementation platform("io.github.jho951.platform:platform-security-bom:3.0.0")
 implementation "io.github.jho951.platform:platform-governance-starter"
 implementation "io.github.jho951.platform:platform-security-starter"
-implementation "io.github.jho951.platform:platform-security-governance-bridge:1.0.3"
+implementation "io.github.jho951.platform:platform-security-hybrid-web-adapter"
+implementation "io.github.jho951.platform:platform-security-governance-bridge:3.0.0"
 ```
 
 현재 상태는 `Hybrid Embedded Gateway Mode` 입니다.
 
-- `GatewayPlatformSecurityWebFilter`가 auth-service 세션 검증, platform policy 평가, admin authz 위임, deny 응답 생성을 담당합니다.
+- `GatewayPlatformSecurityWebFilter`가 auth-service 세션 검증, `HybridSecurityRuntime` 평가, admin authz 위임, deny 응답 생성을 담당합니다.
 - `GatewayPolicyFilter`는 trusted header 정리, platform downstream header 주입, 내부 JWT 주입, upstream proxy 실행만 담당합니다.
 - `platform-security-governance-bridge`는 `SecurityAuditPublisher`를 통해 security verdict를 governance audit recorder로 발행합니다.
 - 실패 응답 계약은 `GatewayFailureResponseFactory`와 `GatewayResponseContractWriter`가 공통으로 렌더링합니다.
-- 자동 WebFlux starter filter를 주 런타임으로 쓰지 않고, `GatewayApplication`에서 `PlatformSecurityAutoConfiguration`, `PlatformSecurityInternalAutoConfiguration`을 exclude 한 뒤 platform 엔진을 내장한 gateway 고유 필터 체인을 사용합니다.
+- 자동 WebFlux starter filter를 주 런타임으로 쓰지 않고, `GatewayApplication`에서 `PlatformSecurityHybridWebAdapterAutoConfiguration`만 exclude 한 뒤 gateway 고유 필터 체인과 `GatewayPlatformSecurityConfiguration`이 platform runtime surface를 조립합니다.
 
 중요한 기준:
 
@@ -96,7 +98,7 @@ implementation "io.github.jho951.platform:platform-security-governance-bridge:1.
 | 지금도 순수 Java라서 platform-security를 못 쓰는 상태인가 | 아닙니다. Spring Boot로 전환되어 있고, platform-security policy engine도 실제 요청 경로에서 사용합니다. |
 | Gateway 인증 정책은 어디서 적용되는가 | credential 검증과 정책 판정은 `GatewayPlatformSecurityWebFilter`에서 수행됩니다. |
 | 왜 WebFlux security chain은 `permitAll`인가 | Spring Security 기본 인증이 `/health`, 공개 API, 프록시 요청을 먼저 차단하지 않게 하기 위해서입니다. Gateway 정책은 별도 필터에서 수행합니다. |
-| 현재 2계층 플랫폼을 실제로 쓰는 부분은 무엇인가 | `platform-security`는 credential 결과 수용, boundary/IP/rate-limit/admin authz policy 평가에, `platform-security-governance-bridge`는 security audit publish에, `platform-governance`는 audit recorder에 사용합니다. |
+| 현재 2계층 플랫폼을 실제로 쓰는 부분은 무엇인가 | `platform-security`는 `HybridSecurityRuntime`, boundary/IP/rate-limit/admin authz policy 평가에, `platform-security-governance-bridge`는 security audit publish에, `platform-governance`는 internal audit recorder와 `AuditSink` delivery에 사용합니다. |
 | `jakarta.servlet-api`가 왜 들어갔는가 | 현재 `platform-security-starter` 쪽 auto-configuration이 servlet 타입을 참조하므로, WebFlux 앱에서도 클래스 로딩이 실패하지 않도록 런타임 classpath에 둡니다. |
 
 현재 상태를 정확히 표현하면 다음과 같습니다.

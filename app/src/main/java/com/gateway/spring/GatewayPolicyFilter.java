@@ -353,7 +353,7 @@ public final class GatewayPolicyFilter implements GlobalFilter, Ordered {
 
     private boolean shouldForwardAuthorizationHeader(RouteDefinition route) {
         if (route.routeType() == RouteType.PROTECTED || route.routeType() == RouteType.ADMIN) {
-            return false;
+            return true;
         }
         return config.forwardAuthorizationHeader()
                 || (route.routeType() == RouteType.PUBLIC && "auth".equals(route.upstreamName()));

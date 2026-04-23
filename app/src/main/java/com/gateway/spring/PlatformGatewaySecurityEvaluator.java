@@ -3,12 +3,12 @@ package com.gateway.spring;
 import io.github.jho951.platform.security.api.SecurityContext;
 import io.github.jho951.platform.security.api.SecurityEvaluationResult;
 import io.github.jho951.platform.security.api.SecurityRequest;
-import io.github.jho951.platform.security.web.SecurityIngressAdapter;
+import io.github.jho951.platform.security.hybrid.HybridSecurityRuntime;
 
 public final class PlatformGatewaySecurityEvaluator implements GatewaySecurityEvaluator {
-    private final SecurityIngressAdapter delegate;
+    private final HybridSecurityRuntime delegate;
 
-    public PlatformGatewaySecurityEvaluator(SecurityIngressAdapter delegate) {
+    public PlatformGatewaySecurityEvaluator(HybridSecurityRuntime delegate) {
         this.delegate = delegate;
     }
 

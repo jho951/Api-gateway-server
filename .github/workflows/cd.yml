@@ -205,8 +205,21 @@ jobs:
           aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${REGISTRY}"
           cd "${DEPLOY_BUNDLE_DIR}"
           test -f .env.backend
+          test -f docker-compose.backend.yml
           sed -i "s|^GATEWAY_IMAGE=.*$|GATEWAY_IMAGE=${IMAGE_URI}|" .env.backend
-          ./scripts/deploy-stack.sh up
+          compose_backend() {
+            docker compose --env-file .env.backend -f docker-compose.backend.yml "$@"
+          }
+          if ! compose_backend pull gateway-service; then
+            echo "Gateway image pull failed once; retrying..." >&2
+            sleep 15
+            compose_backend pull gateway-service
+          fi
+          if ! compose_backend up -d gateway-service; then
+            echo "Gateway deploy failed once; retrying..." >&2
+            sleep 15
+            compose_backend up -d gateway-service
+          fi
           EOF
 
       - name: Fallback deploy command

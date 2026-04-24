@@ -72,6 +72,8 @@ public final class GatewayMetrics {
                     .append('\n');
         }
 
+        builder.append("# EOF\n");
+
         return builder.toString();
     }
 
@@ -104,4 +106,3 @@ public final class GatewayMetrics {
         }
     }
 }
-

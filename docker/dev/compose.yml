@@ -1,11 +1,5 @@
 services:
   gateway-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-      secrets:
-        - gh_token
-        - github_actor
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -37,8 +31,3 @@ services:
       GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS: ${GATEWAY_SESSION_LOCAL_CACHE_TTL_SECONDS:-3}
       GATEWAY_SESSION_CACHE_TTL_SECONDS: ${GATEWAY_SESSION_CACHE_TTL_SECONDS:-60}
       GATEWAY_SESSION_CACHE_KEY_PREFIX: ${GATEWAY_SESSION_CACHE_KEY_PREFIX:-gateway:session:}
-secrets:
-  gh_token:
-    environment: GH_TOKEN
-  github_actor:
-    environment: GITHUB_ACTOR

@@ -108,5 +108,5 @@ authz-service는 일반 client가 직접 호출하는 public API가 아닙니다
 
 | 항목 | 현재 상태 | 결정 필요 |
 | --- | --- | --- |
-| `/v1/permissions/**` | shared routing 계약에는 Authz route로 표현되어 있지만 Gateway 구현은 직접 프록시하지 않습니다. | public/internal route로 열지, 문서에서 관리자 위임 흐름만 남길지 결정 |
+| `/v1/permissions/**` | Gateway 구현은 현재 public/internal route로 직접 프록시하지 않습니다. | 관리자 위임 흐름만 문서화하고 실제 판정은 `/permissions/internal/admin/verify`로 유지 |
 | contract lock commit | gateway, auth-service, user-service, authz-service의 lock commit이 서로 다릅니다. | 같은 contract commit 기준으로 맞출지 결정 |

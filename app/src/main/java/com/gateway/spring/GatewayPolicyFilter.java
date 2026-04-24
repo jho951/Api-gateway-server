@@ -95,6 +95,7 @@ public final class GatewayPolicyFilter implements GlobalFilter, Ordered {
         RouteMatch match = resolveRouteMatch(exchange, requestPath);
 
         applyResponseHeaders(exchange, requestId, correlationId);
+        normalizeCorsResponseHeadersBeforeCommit(exchange);
         if (match != null) {
             rewriteLocationBeforeCommit(exchange, match.route());
         }
@@ -263,24 +264,38 @@ public final class GatewayPolicyFilter implements GlobalFilter, Ordered {
         headers.set("Cache-Control", "no-store");
         headers.set(TraceHeaders.REQUEST_ID, requestId);
         headers.set(TraceHeaders.CORRELATION_ID, correlationId);
+    }
 
+    private void normalizeCorsResponseHeadersBeforeCommit(ServerWebExchange exchange) {
         String origin = exchange.getRequest().getHeaders().getFirst("Origin");
         String allowOrigin = resolveAllowOrigin(origin);
-        if (allowOrigin != null) {
-            headers.setAccessControlAllowOrigin(allowOrigin);
-            headers.set("Vary", "Origin");
-            headers.setAccessControlAllowCredentials(true);
-            headers.setAccessControlAllowHeaders(List.of("Authorization", "Content-Type", "X-Request-Id"));
-            headers.setAccessControlAllowMethods(List.of(
-                    org.springframework.http.HttpMethod.GET,
-                    org.springframework.http.HttpMethod.POST,
-                    org.springframework.http.HttpMethod.PUT,
-                    org.springframework.http.HttpMethod.PATCH,
-                    org.springframework.http.HttpMethod.DELETE,
-                    org.springframework.http.HttpMethod.OPTIONS
-            ));
-            headers.setAccessControlMaxAge(600);
-        }
+        exchange.getResponse().beforeCommit(() -> {
+            HttpHeaders headers = exchange.getResponse().getHeaders();
+            headers.remove(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN);
+            headers.remove(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS);
+            headers.remove(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS);
+            headers.remove(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS);
+            headers.remove(HttpHeaders.ACCESS_CONTROL_MAX_AGE);
+            headers.remove(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS);
+
+            if (allowOrigin != null) {
+                headers.setAccessControlAllowOrigin(allowOrigin);
+                headers.set("Vary", "Origin");
+                headers.setAccessControlAllowCredentials(true);
+                headers.setAccessControlAllowHeaders(List.of("Authorization", "Content-Type", "X-Request-Id"));
+                headers.setAccessControlAllowMethods(List.of(
+                        org.springframework.http.HttpMethod.GET,
+                        org.springframework.http.HttpMethod.POST,
+                        org.springframework.http.HttpMethod.PUT,
+                        org.springframework.http.HttpMethod.PATCH,
+                        org.springframework.http.HttpMethod.DELETE,
+                        org.springframework.http.HttpMethod.OPTIONS
+                ));
+                headers.setAccessControlExposeHeaders(List.of("X-Request-Id", "X-Correlation-Id"));
+                headers.setAccessControlMaxAge(600);
+            }
+            return Mono.empty();
+        });
     }
 
     private void rewriteLocationBeforeCommit(ServerWebExchange exchange, RouteDefinition route) {

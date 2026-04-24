@@ -22,6 +22,7 @@ case "$ENV_NAME" in
   dev|prod)
     BASE_COMPOSE_FILE="$PROJECT_ROOT/docker/compose.yml"
     ENV_COMPOSE_FILE="$PROJECT_ROOT/docker/$ENV_NAME/compose.yml"
+    BUILD_COMPOSE_FILE="$PROJECT_ROOT/docker/compose.build.yml"
     ;;
   *) usage; exit 1 ;;
 esac
@@ -76,17 +77,28 @@ compose() {
     docker compose --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT_NAME" -f "$BASE_COMPOSE_FILE" -f "$ENV_COMPOSE_FILE" "$@"
 }
 
+compose_dev_build() {
+  APP_ENV="$ENV_NAME" GATEWAY_ENV_FILE="$ENV_FILE" SERVICE_SHARED_NETWORK="$SHARED_NETWORK" BACKEND_SHARED_NETWORK="$SHARED_NETWORK" MSA_SHARED_NETWORK="$SHARED_NETWORK" \
+    docker compose --env-file "$ENV_FILE" -p "$COMPOSE_PROJECT_NAME" -f "$BASE_COMPOSE_FILE" -f "$ENV_COMPOSE_FILE" -f "$BUILD_COMPOSE_FILE" "$@"
+}
+
 case "$ACTION" in
   up)
     if [[ "$ENV_NAME" == "prod" ]]; then
       compose pull "$@"
       compose up -d "$@"
     else
-      compose up --build "$@"
+      compose_dev_build up --build "$@"
     fi
     ;;
   down) compose down --remove-orphans "$@" ;;
-  build) compose build "$@" ;;
+  build)
+    if [[ "$ENV_NAME" == "prod" ]]; then
+      echo "prod profile is image-only; build is only supported for dev." >&2
+      exit 1
+    fi
+    compose_dev_build build "$@"
+    ;;
   logs) compose logs -f "$@" ;;
   ps) compose ps "$@" ;;
   restart)
@@ -95,7 +107,7 @@ case "$ACTION" in
       compose pull "$@"
       compose up -d "$@"
     else
-      compose up --build "$@"
+      compose_dev_build up --build "$@"
     fi
     ;;
 esac

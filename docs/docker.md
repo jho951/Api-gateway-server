@@ -15,8 +15,10 @@
 - auth-service 기동
 - authz-service 기동
 - user-service 기동
-- block-service 기동
-- redis 기동
+- editor-service 기동
+- Redis endpoint 준비
+  dev 단일 Docker host에서는 `redis-server` 또는 `central-redis` alias를 사용할 수 있습니다.
+  EC2 분산 배포에서는 반드시 `REDIS_HOST`에 private DNS/IP 또는 관리형 Redis endpoint를 넣어야 합니다.
 - Gateway 전용 환경변수 설정
 
 ## Compose 파일
@@ -24,7 +26,11 @@
 | 환경 | Compose 파일 | env 파일 | 배포 방식 |
 | --- | --- | --- | --- |
 | `dev` | `docker/compose.yml` + `docker/dev/compose.yml` | `.env.dev` | 로컬 build |
-| `prod` | `docker/compose.yml` + `docker/prod/compose.yml` | `.env.prod` | GHCR image pull |
+| `prod` | `docker/compose.yml` + `docker/prod/compose.yml` | `.env.prod` | ECR image pull |
+
+빌드 전용 override:
+
+- `docker/compose.build.yml`: private package 인증이 필요한 build 설정만 포함
 
 멀티모듈 기준:
 
@@ -65,10 +71,10 @@ curl -i http://localhost:8080/ready
 
 | 환경변수 | 용도 |
 | --- | --- |
-| `GATEWAY_IMAGE` | prod compose가 pull할 GHCR 이미지 태그 |
+| `GATEWAY_IMAGE` | prod compose가 pull할 ECR 이미지 태그 |
 | `AUTH_SERVICE_URL` | auth-service base URL |
 | `USER_SERVICE_URL` | user-service base URL |
-| `BLOCK_SERVICE_URL` | block/document service base URL |
+| `EDITOR_SERVICE_URL` | editor-service base URL (`BLOCK_SERVICE_URL` legacy fallback 허용) |
 | `AUTHZ_ADMIN_VERIFY_URL` | authz-service 관리자 권한 검증 API 전체 URL |
 | `GATEWAY_INTERNAL_REQUEST_SECRET` | authz-service legacy/hybrid internal secret |
 | `AUTHZ_INTERNAL_JWT_SECRET` | authz-service 운영 JWT internal auth secret |
@@ -77,7 +83,12 @@ curl -i http://localhost:8080/ready
 | `REDIS_HOST` | Redis host |
 | `REDIS_PORT` | Redis port |
 
-현재 코드는 authz 검증 호출에 `AUTHZ_ADMIN_VERIFY_URL`, `GATEWAY_INTERNAL_REQUEST_SECRET`, `AUTHZ_INTERNAL_JWT_*`를 사용합니다.
+운영 배포 기준:
+
+- `AUTH_SERVICE_URL`, `USER_SERVICE_URL`, `EDITOR_SERVICE_URL`, `AUTHZ_ADMIN_VERIFY_URL`, `REDIS_HOST`는 single-host Compose alias가 아니라 VPC 내부 private DNS/IP 기준으로 넣습니다.
+- `docker/prod/compose.yml`의 기본 bind는 `127.0.0.1:8080`입니다. Gateway만 public ingress 대상이고, public bind가 필요하면 Nginx/ALB 앞단 또는 Security Group 제한을 같이 둡니다.
+
+현재 코드는 authz 검증 호출에 `AUTHZ_ADMIN_VERIFY_URL`, `GATEWAY_INTERNAL_REQUEST_SECRET`, `AUTHZ_INTERNAL_JWT_*`를 사용합니다. editor upstream은 `EDITOR_SERVICE_URL`을 canonical로 읽고, `BLOCK_SERVICE_URL`은 legacy fallback으로만 허용합니다.
 
 ## 디렉토리 구조
 
@@ -92,21 +103,23 @@ docker
 ```
 
 - `docker/compose.yml`: auth-service, authz-service와 같은 공통 base compose
-- `docker/dev/compose.yml`: 개발용 override, 로컬 build 사용
+- `docker/dev/compose.yml`: 개발용 실행 override, image/env/port만 선언
+- `docker/compose.build.yml`: 개발 또는 CI build 전용 override, `build`와 secret만 선언
 - `docker/prod/compose.yml`: 운영용 override, `GATEWAY_IMAGE` pull 사용
 
 ## GitHub Actions 배포 예시
 
 현재 `cd.yml`은 `DEPLOY_COMMAND` secret 안의 쉘 명령을 그대로 실행합니다.
 
-구조는 auth-service/authz-service와 같은 `docker/compose.yml + docker/{env}/compose.yml` 레이어를 따르되, gateway는 `prod`에서 GHCR image pull 배포를 사용합니다.
+구조는 auth-service/authz-service와 같은 `docker/compose.yml + docker/{env}/compose.yml` 레이어를 따르되, gateway는 `prod`에서 ECR image pull 배포를 사용합니다.
 
 배포 step에서 바로 쓸 수 있는 환경변수:
 
 - `DEPLOY_ENVIRONMENT`: `dev` 또는 `prod`
 - `GITHUB_SHA`: 배포할 커밋 SHA
-- `IMAGE_REF`: `ghcr.io/<owner>/<repo>:<sha>`
+- `IMAGE_REF`: `<account>.dkr.ecr.<region>.amazonaws.com/<env>-gateway-service:<sha>`
 - `GH_TOKEN`, `GITHUB_ACTOR`: Dockerfile이 GitHub Packages 의존성 해석에 사용할 값
+  운영 runtime에서는 사용하지 않고, CI 또는 로컬 build 단계에서만 사용
 
 권장 `DEPLOY_COMMAND` secret 예시:
 
@@ -132,9 +145,10 @@ ssh -o StrictHostKeyChecking=no "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST" "
 - `/srv/gateway-service`에 이 레포가 clone 되어 있어야 합니다.
 - `.env.dev` 또는 `.env.prod`가 서버에 있어야 합니다.
 - Docker, Docker Compose, Git이 설치되어 있어야 합니다.
-- `SERVICE_SHARED_NETWORK`에 해당하는 외부 Docker network가 있어야 합니다.
+- 여러 서비스를 같은 EC2에 함께 올릴 때만 `SERVICE_SHARED_NETWORK` 외부 Docker network가 필요합니다.
+- 서비스를 EC2별로 분리하면 gateway는 private DNS/IP로 다른 서비스를 호출하고 Docker network는 호스트 내부 통신 용도로만 사용합니다.
 
 운영 기준:
 
 - `dev`: 원격 또는 로컬에서 `docker compose up --build`
-- `prod`: `GATEWAY_IMAGE=ghcr.io/...:<sha>`를 주입하고 `docker compose pull && up -d`
+- `prod`: `GATEWAY_IMAGE=<account>.dkr.ecr.<region>.amazonaws.com/<env>-gateway-service:<sha>`를 주입하고 `docker compose pull && up -d`

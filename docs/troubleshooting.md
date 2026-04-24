@@ -158,3 +158,26 @@ operational audit:
 ## contract lock이 안 맞음
 
 `contract.lock.yml`의 commit은 이 repo가 따르는 service-contract commit입니다. API path, request, response, header, status, auth 정책이 바뀌면 service-contract를 먼저 수정하고 lock commit을 갱신해야 합니다.
+
+## EC2 Compose와 ECS/Fargate 중 무엇을 쓸지
+
+gateway-service는 두 방식을 모두 검토했습니다. 구현 이력과 대표 코드 조각은 service-contract의 `shared/deployment-topologies.md`에 남깁니다.
+
+`EC2 + Docker Compose`가 맞는 경우:
+
+- 단일 host에서 reverse proxy, exporter, sidecar를 직접 붙여 운영합니다.
+- 무중단보다 빠른 bootstrap과 수동 제어가 우선입니다.
+
+`ECS/Fargate + CodeDeploy`가 맞는 경우:
+
+- gateway를 교체하는 동안 public ingress를 끊으면 안 됩니다.
+- 새 task set health check 후 traffic shift가 필요합니다.
+- ALB, target group, blue/green rollback을 표준으로 쓰고 싶습니다.
+
+현재 운영 기본값:
+
+- 현재 Free Tier 계정에서는 `단일 EC2 + docker compose`를 실제 배포 기본값으로 둡니다.
+- 이때 gateway-service는 외부 공개 진입점 역할만 담당하고, 다른 서비스는 같은 host 내부 compose network로 호출합니다.
+- 비용 제약이 해제되면 `ECS/Fargate + public ALB + CodeDeploy blue/green`으로 승격합니다.
+- `redis-service`, `monitoring-service`처럼 host 운영이 자연스러운 서비스만 EC2를 유지합니다.
+- `docker/prod/compose.yml`은 로컬/임시 검증 reference로 보되, 표준 운영 배포 방식으로 취급하지 않습니다.

@@ -230,6 +230,31 @@ class GatewaySpringIntegrationTest {
     }
 
     @Test
+    void authExchangeResponseKeepsSingleCorsOriginHeaderWhenUpstreamAlsoAddsCors() throws Exception {
+        startUpstreams(new AtomicInteger(), "user-123", new AtomicInteger(), null, null, null, null, null);
+        authServer.createContext("/auth/exchange", exchange -> {
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "http://localhost:5174");
+            exchange.getResponseHeaders().add("Access-Control-Allow-Credentials", "true");
+            writeJson(exchange, 200, "{\"ok\":true}");
+        });
+        startGateway();
+
+        HttpResponse<String> response = sendGatewayPost(
+                "/v1/auth/exchange",
+                "{\"ticket\":\"dummy\"}",
+                Map.of(
+                        "Origin", "http://localhost:5174",
+                        "Content-Type", "application/json"
+                )
+        );
+
+        assertEquals(200, response.statusCode(), response.body());
+        assertEquals(1, response.headers().allValues("Access-Control-Allow-Origin").size(), response.headers().map().toString());
+        assertEquals("http://localhost:5174", response.headers().firstValue("Access-Control-Allow-Origin").orElse(null));
+        assertEquals("true", response.headers().firstValue("Access-Control-Allow-Credentials").orElse(null));
+    }
+
+    @Test
     void loginRouteIsRateLimitedByPlatformPolicy() throws Exception {
         startUpstreams(new AtomicInteger(), "user-123", new AtomicInteger(), null, null, null, null, null);
         startGateway(Map.of("GATEWAY_LOGIN_RATE_LIMIT_PER_MINUTE", "1"));

@@ -2,7 +2,7 @@ name: gateway-service
 
 services:
   gateway-service:
-    image: ${GATEWAY_IMAGE:-ghcr.io/jho951/gateway-service:latest}
+    image: ${GATEWAY_IMAGE:-gateway-service:dev}
     networks:
       service-shared:
         aliases:
